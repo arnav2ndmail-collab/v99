@@ -30,7 +30,7 @@ async function loadJSZip() {
 }
 
 // Process BITSAT zip entirely in browser
-async function processBitsatZip(file, testName, onProgress) {
+async function processBitsatZip(file, testName, onProgress, bonusFile=null, bonusAnswers=[]) {
   const JSZip = await loadJSZip()
   onProgress('Reading zip file...')
   const zip = await JSZip.loadAsync(file)
@@ -132,6 +132,60 @@ async function processBitsatZip(file, testName, onProgress) {
 
   if (!questions.length) throw new Error('No questions found. Check zip format.')
 
+  // ── Process bonus questions if bonus zip provided ──────────────────────
+  if (bonusFile) {
+    onProgress('Loading bonus zip...')
+    const bonusZip = await JSZip.loadAsync(bonusFile)
+    const bonusImageMap = {}
+    const bonusImgPromises = []
+    bonusZip.forEach((relPath, zipEntry) => {
+      const filename = relPath.split('/').pop()
+      if (!/\.(png|jpg|jpeg)$/i.test(filename)) return
+      const key = filename.replace(/\.(png|jpg|jpeg)$/i, '')
+      bonusImgPromises.push(
+        zipEntry.async('base64').then(b64 => { bonusImageMap[key] = b64 })
+      )
+    })
+    await Promise.all(bonusImgPromises)
+    onProgress(`Processing ${Object.keys(bonusImageMap).length} bonus images...`)
+
+    // Bonus images named: Bonus__--__131__--__1.png
+    // Get unique bonus qnums from image keys
+    const bonusQnums = [...new Set(
+      Object.keys(bonusImageMap)
+        .filter(k => k.startsWith('Bonus__--__'))
+        .map(k => k.split('__--__')[1])
+    )].map(Number).sort((a,b)=>a-b)
+
+    bonusQnums.forEach((qnum, idx) => {
+      const qnumStr = String(qnum)
+      const images = []
+      for (let i = 1; i <= 10; i++) {
+        const key = `Bonus__--__${qnumStr}__--__${i}`
+        if (bonusImageMap[key]) images.push(bonusImageMap[key])
+        else break
+      }
+      const localIdx = idx  // 0-based index into bonusAnswers
+      const ans = bonusAnswers[localIdx] || ''
+      questions.push({
+        qnum: globalQnum + idx + 1,
+        subject: 'Bonus',
+        isBonus: true,
+        type: 'MCQ',
+        text: `Bonus Q${idx + 1}`,
+        opts: ['A','B','C','D'],
+        ans: ans.toUpperCase().trim(),
+        hasImage: images.length > 0,
+        images,
+        mCor: 3,
+        mNeg: 1,
+      })
+    })
+    onProgress(`Added ${bonusQnums.length} bonus questions ✅`)
+  }
+
+  if (!questions.length) throw new Error('No questions found. Check zip format.')
+
   return {
     id: 'bitsat_' + Date.now(),
     title: testName,
@@ -140,6 +194,7 @@ async function processBitsatZip(file, testName, onProgress) {
     mCor: 3,
     mNeg: 1,
     order: 999,
+    hasBonus: bonusFile != null,
     questions
   }
 }
@@ -164,6 +219,12 @@ export default function AdminPage() {
   const [result, setResult]       = useState(null)
   const [zipDrag, setZipDrag]     = useState(false)
   const zipRef = useRef()
+  // Bonus
+  const [hasBonus, setHasBonus]   = useState(false)
+  const [bonusFile, setBonusFile] = useState(null)
+  const [bonusCount, setBonusCount] = useState(12) // how many bonus qs
+  const [bonusAnswers, setBonusAnswers] = useState([]) // ['A','B',...]
+  const bonusRef = useRef()
 
   useEffect(() => {
     const t = localStorage.getItem(ADM_KEY)
@@ -212,12 +273,17 @@ export default function AdminPage() {
 
   const processZip = async () => {
     if (!zipFile || !testName.trim()) return
+    if (hasBonus && !bonusFile) { flash('Please upload the bonus zip too', false); return }
     setProcessing(true); setResult(null)
     try {
-      const testData = await processBitsatZip(zipFile, testName.trim(), setProgress)
+      const testData = await processBitsatZip(
+        zipFile, testName.trim(), setProgress,
+        hasBonus ? bonusFile : null,
+        hasBonus ? bonusAnswers : []
+      )
       setProgress('Done! ✅')
       setResult({ ok:true, testData, questions: testData.questions.length })
-      setZipFile(null); setTestName('')
+      setZipFile(null); setTestName(''); setBonusFile(null); setHasBonus(false); setBonusAnswers([])
     } catch(e) {
       setResult({ ok:false, error: e.message })
       flash('❌ '+e.message, false)
@@ -363,6 +429,74 @@ export default function AdminPage() {
                   <button className="proc-btn" onClick={processZip} disabled={processing||!testName.trim()}>
                     {processing ? <><span className="spin"/>Processing…</> : '⚡ Generate JSON'}
                   </button>
+                </div>
+              )}
+
+              {/* Bonus toggle */}
+              {zipFile && (
+                <div className="bonus-section">
+                  <div className="bonus-toggle-row">
+                    <label className="bonus-toggle-label">
+                      <input type="checkbox" checked={hasBonus} onChange={e=>{setHasBonus(e.target.checked);if(!e.target.checked){setBonusFile(null);setBonusAnswers([])}}}/>
+                      <span>This test has Bonus Questions</span>
+                    </label>
+                    <span className="bonus-note">Only unlocked after all main questions answered</span>
+                  </div>
+                  {hasBonus && (
+                    <div className="bonus-body">
+                      {/* Bonus zip upload */}
+                      <div className="bonus-zip-row">
+                        <div className="flabel">Bonus ZIP (images only)</div>
+                        {!bonusFile ? (
+                          <button className="bonus-pick-btn" onClick={()=>bonusRef.current.click()}>📦 Upload Bonus ZIP</button>
+                        ) : (
+                          <div className="bonus-file-row">
+                            <span className="bonus-file-name">📦 {bonusFile.name}</span>
+                            <button className="bonus-remove" onClick={()=>setBonusFile(null)}>✕</button>
+                          </div>
+                        )}
+                        <input ref={bonusRef} type="file" accept=".zip" style={{display:'none'}} onChange={e=>{
+                          const f=e.target.files[0]; if(!f) return
+                          setBonusFile(f)
+                          // auto-detect count from filename pattern if possible
+                        }}/>
+                      </div>
+                      {/* Bonus count */}
+                      <div className="bonus-count-row">
+                        <label className="flabel">Number of Bonus Questions</label>
+                        <input className="finput" style={{width:100}} type="number" min={1} max={30}
+                          value={bonusCount}
+                          onChange={e=>{
+                            const n=parseInt(e.target.value)||1
+                            setBonusCount(n)
+                            setBonusAnswers(prev=>{
+                              const arr=[...prev]
+                              while(arr.length<n) arr.push('')
+                              return arr.slice(0,n)
+                            })
+                          }}/>
+                      </div>
+                      {/* Answer key entry */}
+                      <div className="flabel" style={{marginBottom:6}}>Bonus Answer Key (A/B/C/D)</div>
+                      <div className="bonus-ans-grid">
+                        {Array.from({length:bonusCount},(_,i)=>(
+                          <div key={i} className="bonus-ans-cell">
+                            <span className="bonus-ans-num">B{i+1}</span>
+                            <select className="bonus-ans-sel"
+                              value={bonusAnswers[i]||''}
+                              onChange={e=>{
+                                const a=[...bonusAnswers]
+                                a[i]=e.target.value
+                                setBonusAnswers(a)
+                              }}>
+                              <option value="">?</option>
+                              {['A','B','C','D'].map(o=><option key={o} value={o}>{o}</option>)}
+                            </select>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -650,4 +784,22 @@ const PANEL = `
 /* Modal */
 .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);z-index:500;display:flex;align-items:center;justify-content:center;padding:20px}
 .modal{background:white;border-radius:18px;padding:28px;width:100%;max-width:460px;max-height:90vh;overflow-y:auto;box-shadow:0 24px 80px rgba(0,0,0,.25)}
+/* Bonus */
+.bonus-section{background:#fff8e1;border:1px solid #ffe082;border-radius:12px;padding:16px 18px;margin-bottom:16px}
+.bonus-toggle-row{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:4px}
+.bonus-toggle-label{display:flex;align-items:center;gap:8px;font-weight:700;font-size:.88rem;color:#5d4037;cursor:pointer}
+.bonus-toggle-label input{width:16px;height:16px;cursor:pointer;accent-color:#e65100}
+.bonus-note{font-size:.7rem;color:#888;font-style:italic}
+.bonus-body{margin-top:14px;display:flex;flex-direction:column;gap:12px}
+.bonus-zip-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.bonus-pick-btn{background:#e65100;color:white;border:none;padding:8px 16px;border-radius:7px;font-family:'Inter',sans-serif;font-weight:700;font-size:.78rem;cursor:pointer}
+.bonus-pick-btn:hover{background:#bf360c}
+.bonus-file-row{display:flex;align-items:center;gap:8px}
+.bonus-file-name{font-size:.78rem;color:#333;font-weight:600}
+.bonus-remove{background:none;border:1px solid #ccc;border-radius:4px;padding:2px 8px;cursor:pointer;color:#999;font-size:.75rem}
+.bonus-count-row{display:flex;align-items:center;gap:10px}
+.bonus-ans-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(70px,1fr));gap:6px}
+.bonus-ans-cell{display:flex;align-items:center;gap:5px;background:white;border:1px solid #ffe082;border-radius:6px;padding:5px 8px}
+.bonus-ans-num{font-size:.65rem;font-weight:800;color:#e65100;font-family:monospace;min-width:22px}
+.bonus-ans-sel{border:none;background:transparent;font-family:'Inter',sans-serif;font-size:.82rem;font-weight:700;color:#1a237e;cursor:pointer;outline:none;padding:0}
 `

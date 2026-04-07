@@ -1,12 +1,13 @@
 import { useState, useRef } from 'react'
 import Head from 'next/head'
 
-const SUBJ_ORDER = ['Physics','Chemistry','Maths','English & LR']
+const SUBJ_ORDER = ['Physics','Chemistry','Maths','English & LR','Bonus']
 const SC = {
   'Physics':      { bg:'#1565c0', grd:'linear-gradient(135deg,#1565c0,#1976d2)', light:'#dbeafe', dot:'#3b82f6', label:'PHY', emoji:'⚡' },
   'Chemistry':    { bg:'#15803d', grd:'linear-gradient(135deg,#15803d,#16a34a)', light:'#dcfce7', dot:'#4ade80', label:'CHEM', emoji:'🧪' },
   'Maths':        { bg:'#b91c1c', grd:'linear-gradient(135deg,#b91c1c,#dc2626)', light:'#fee2e2', dot:'#f87171', label:'MATH', emoji:'📐' },
   'English & LR': { bg:'#7c3aed', grd:'linear-gradient(135deg,#7c3aed,#8b5cf6)', light:'#ede9fe', dot:'#a78bfa', label:'ENG',  emoji:'📖' },
+  'Bonus':        { bg:'#c2410c', grd:'linear-gradient(135deg,#c2410c,#ea580c)', light:'#fff7ed', dot:'#fb923c', label:'BON',  emoji:'🎁' },
 }
 const getSC = s => SC[s] || { bg:'#475569',grd:'linear-gradient(135deg,#475569,#64748b)',light:'#f1f5f9',dot:'#94a3b8',label:'Q',emoji:'📝' }
 const RES = {
@@ -37,7 +38,7 @@ export default function Analyser() {
         result: q.result || (!q.yourAnswer ? 'unattempted' : q.yourAnswer==='skip' ? 'skipped' :
           String(q.correctAnswer||'').toUpperCase().trim() === String(q.yourAnswer||'').toUpperCase().trim() ? 'correct' : 'wrong')
       }))
-      const first = SUBJ_ORDER.find(s => d.questions.some(q=>q.subject===s)) || d.questions[0]?.subject
+      const first = SUBJ_ORDER.filter(s=>s!=='Bonus').find(s => d.questions.some(q=>q.subject===s)) || d.questions[0]?.subject
       setData(d); setActiveSubj(first); setCurQ(0); setFilter('all'); setTab('overview')
     } catch(e) { setErr('❌ '+e.message) }
   }
@@ -83,6 +84,9 @@ export default function Analyser() {
 
   // Computed
   const allQs = data.questions
+  const mainQs = allQs.filter(q=>q.subject!=='Bonus')
+  const bonusQs = allQs.filter(q=>q.subject==='Bonus')
+  const hasBonusQs = bonusQs.length > 0
   const subjects = SUBJ_ORDER.filter(s => allQs.some(q=>q.subject===s))
   if (!subjects.length) subjects.push(allQs[0]?.subject||'All')
   const getSubjQs = s => s ? allQs.filter(q=>q.subject===s) : allQs
@@ -158,14 +162,16 @@ export default function Analyser() {
                 <div>Subject</div><div>Score</div><div>Correct</div><div>Wrong</div><div>Not Att.</div><div>Accuracy</div>
               </div>
               {[['overall', allQs], ...subjects.map(s=>[s,getSubjQs(s)])].map(([s,qs])=>{
-                const st=ms(qs); const sc=getSC(s); const isOverall=s==='overall'
+                const st=ms(qs); const sc=getSC(s); const isOverall=s==='overall'; const isBonus=s==='Bonus'
                 const score=st.cor*mCor-st.wrg*mNeg; const pct=(st.cor+st.wrg)?Math.round(st.cor/(st.cor+st.wrg)*100):0
-                return(
-                  <div key={s} className={`bt-row${isOverall?' bt-overall':''}`} onClick={!isOverall?()=>openReview(s):undefined} style={!isOverall?{cursor:'pointer'}:{}}>
+                return(<>
+                  {isBonus && <div key="bonus-sep" style={{gridColumn:'1/-1',borderTop:'2px dashed #fb923c22',margin:'0',display:'grid',gridTemplateColumns:'1fr',padding:'4px 20px',background:'#fff7ed',fontSize:'.65rem',color:'#c2410c',fontWeight:700,letterSpacing:1}}>🎁 BONUS SECTION — Optional</div>}
+                  <div key={s} className={`bt-row${isOverall?' bt-overall':''}${isBonus?' bt-bonus':''}`} onClick={!isOverall?()=>openReview(s):undefined} style={!isOverall?{cursor:'pointer'}:{}}>
                     <div className="bt-subj-cell">
                       {!isOverall&&<div className="bt-dot" style={{background:sc.bg}}/>}
                       <span style={{fontWeight:700}}>{isOverall?'🔢 Overall':s}</span>
                       {!isOverall&&<span className="bt-sbadge" style={{background:sc.light,color:sc.bg}}>{sc.label}</span>}
+                      {isBonus&&st.un===st.total&&<span style={{fontSize:'.6rem',color:'#fb923c',marginLeft:4}}>(not attempted)</span>}
                     </div>
                     <div className="bt-num" style={{color:score>=0?'#4ade80':'#f87171'}}>{isOverall?data.score:(score>=0?'+':'')+score}</div>
                     <div className="bt-num green">{st.cor}<span className="bt-den">/{st.total}</span></div>
@@ -176,7 +182,7 @@ export default function Analyser() {
                       <span style={{color:isOverall?'#818cf8':sc.bg,fontFamily:'JetBrains Mono,monospace',fontSize:'.75rem',fontWeight:700}}>{pct}%</span>
                     </div>
                   </div>
-                )
+                </>)
               })}
             </div>
           </div>
@@ -418,6 +424,7 @@ const APP_CSS = `
 .bt-row{display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1.4fr;padding:14px 20px;border-top:1px solid var(--border);align-items:center;transition:background .12s}
 .bt-row:hover{background:rgba(255,255,255,.02)}
 .bt-overall{background:rgba(99,102,241,.04)}
+.bt-bonus{background:rgba(251,146,60,.04)}
 .bt-subj-cell{display:flex;align-items:center;gap:8px}
 .bt-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 .bt-sbadge{font-size:.58rem;font-weight:800;padding:2px 6px;border-radius:6px;font-family:'JetBrains Mono',monospace}

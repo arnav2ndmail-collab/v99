@@ -50,17 +50,14 @@ export default function TestZyro() {
       const saved = localStorage.getItem(RESUME_KEY)
       if (saved) {
         const rd = JSON.parse(saved)
-        // Valid if: has questions, has config, saved less than 6 hours ago
-        if (rd && rd.Qs && rd.Qs.length > 0 && rd.cfg && rd.savedAt &&
+        if (rd && rd.Qs?.length > 0 && rd.cfg && rd.savedAt &&
             Date.now() - rd.savedAt < 6*60*60*1000) {
           setResumeData(rd)
         } else {
           localStorage.removeItem(RESUME_KEY)
         }
       }
-    } catch(e) {
-      localStorage.removeItem(RESUME_KEY)
-    }
+    } catch(e) { localStorage.removeItem(RESUME_KEY) }
     loadTree()
   }, [])
 
@@ -108,13 +105,17 @@ export default function TestZyro() {
     setCbtOn(true)
     startRef.current = Date.now()
     clearInterval(timerRef.current)
-    // Save immediately so resume is available right away
+    // Save immediately so resume works even if window closed right away
     setTimeout(() => {
       try {
-        const saveData = { cfg:c, Qs:qs, ans:blankAns, marked:new Array(qs.length).fill(false), visited:new Array(qs.length).fill(false), cur:0, elapsed:0, savedAt:Date.now() }
-        localStorage.setItem(RESUME_KEY, JSON.stringify(saveData))
+        localStorage.setItem(RESUME_KEY, JSON.stringify({
+          cfg: c, Qs: qs, ans: blankAns,
+          marked: new Array(qs.length).fill(false),
+          visited: new Array(qs.length).fill(false),
+          cur: 0, elapsed: 0, savedAt: Date.now()
+        }))
       } catch(e) {}
-    }, 500)
+    }, 300)
   }
 
   useEffect(() => {
@@ -126,33 +127,28 @@ export default function TestZyro() {
     return () => clearInterval(timerRef.current)
   }, [cbtOn, done])
 
-  // Keep refs in sync so saveProgress always has fresh data
+  // Ref always has fresh state — avoids stale closure in saveProgress
   const cbtStateRef = useRef({})
   useEffect(() => {
-    cbtStateRef.current = { cbtOn, done, Qs, cfg, marked, visited, cur, secs }
+    cbtStateRef.current = { cbtOn, done, Qs, cfg, marked, visited, cur }
   })
 
-  // Save progress — uses ref so always fresh, no stale closure
+  // Stable save function — reads from ref so never stale
   const saveProgress = useCallback(() => {
     const s = cbtStateRef.current
     if (!s.cbtOn || s.done || !s.Qs?.length) return
     try {
       const saveData = {
-        cfg: s.cfg,
-        Qs: s.Qs,
-        ans: cbtAns.current,
-        marked: s.marked,
-        visited: s.visited,
-        cur: s.cur,
+        cfg: s.cfg, Qs: s.Qs, ans: cbtAns.current,
+        marked: s.marked, visited: s.visited, cur: s.cur,
         elapsed: Math.round((Date.now() - startRef.current) / 1000),
         savedAt: Date.now()
       }
       localStorage.setItem(RESUME_KEY, JSON.stringify(saveData))
     } catch(e) {}
-  }, []) // no deps — always reads from ref
+  }, []) // no deps — always reads fresh from ref
 
-  // Register auto-save: every 10s + on window close
-  // Only set up once when CBT starts
+  // Register once when CBT starts, remove when it ends
   useEffect(() => {
     if (!cbtOn || done) return
     const interval = setInterval(saveProgress, 10000)
@@ -161,12 +157,12 @@ export default function TestZyro() {
       clearInterval(interval)
       window.removeEventListener('beforeunload', saveProgress)
     }
-  }, [cbtOn, done]) // only cbtOn/done — saveProgress is stable
+  }, [cbtOn, done]) // saveProgress is stable so not needed in deps
 
   const exitCBT = () => {
     if (!confirm('Exit? Progress is auto-saved — you can resume later.')) return
     clearInterval(timerRef.current)
-    saveProgress() // save before exit
+    saveProgress() // save immediately before exit
     setCbtOn(false); setResult(null)
   }
 
@@ -376,6 +372,22 @@ export default function TestZyro() {
   }
   const navSubjects = isBitsatTest ? BITSAT_SUBJECTS.filter(s=>subjGroups[s]?.length>0) : []
 
+  // Bonus logic
+  const bonusQs = Qs.filter(q=>q.isBonus)
+  const mainQs  = Qs.filter(q=>!q.isBonus)
+  const hasBonus = bonusQs.length > 0
+  // All main questions must be answered (not null, not skip counts as attempted)
+  const mainAllAttempted = mainQs.length > 0 && mainQs.every((_,i) => {
+    const globalIdx = Qs.indexOf(mainQs[i]) >= 0 ? Qs.indexOf(mainQs[i]) : i
+    return ans[globalIdx] !== null && ans[globalIdx] !== undefined
+  })
+  // Simpler: count by index
+  const mainIndices  = Qs.map((_,i)=>i).filter(i=>!Qs[i].isBonus)
+  const bonusIndices = Qs.map((_,i)=>i).filter(i=>Qs[i].isBonus)
+  const mainAllDone  = mainIndices.length > 0 && mainIndices.every(i => ans[i] !== null && ans[i] !== undefined)
+  const bonusUnlocked = mainAllDone
+  const inBonus = bonusIndices.includes(cur)
+
   return (
     <>
       <Head>
@@ -497,7 +509,7 @@ export default function TestZyro() {
                 const sc = getSubjColor(s)
                 const indices = subjGroups[s]||[]
                 const answered = indices.filter(i=>ans[i]&&ans[i]!=='skip').length
-                const isActive = activeNavSubj===s
+                const isActive = activeNavSubj===s && !inBonus
                 return (
                   <button key={s} className={`subj-tab${isActive?' active':''}`}
                     style={isActive?{background:sc.bg,color:'#fff',borderColor:sc.bg}:{}}
@@ -512,14 +524,40 @@ export default function TestZyro() {
                   </button>
                 )
               })}
+              {/* Bonus tab */}
+              {hasBonus && (
+                <button
+                  className={`subj-tab bonus-tab${inBonus?' active':''} ${bonusUnlocked?'unlocked':'locked'}`}
+                  onClick={()=>{
+                    if (!bonusUnlocked) {
+                      const remaining = mainIndices.filter(i=>ans[i]===null||ans[i]===undefined).length
+                      alert(`⚠️ Attempt all ${mainIndices.length} main questions first!\n${remaining} question${remaining!==1?'s':''} still unanswered.`)
+                      return
+                    }
+                    const firstBonus = bonusIndices[0]
+                    if (firstBonus !== undefined) { setActiveNavSubj('Bonus'); goTo(firstBonus) }
+                  }}>
+                  <span className="subj-tab-label">{bonusUnlocked?'🎁':'🔒'}</span>
+                  <span className="subj-tab-name">Bonus</span>
+                  <span className="subj-tab-count">
+                    {bonusUnlocked
+                      ? `${bonusIndices.filter(i=>ans[i]&&ans[i]!=='skip').length}/${bonusIndices.length}`
+                      : `${mainIndices.filter(i=>ans[i]===null||ans[i]===undefined).length} left`}
+                  </span>
+                </button>
+              )}
             </div>
           )}
 
           <div className="cbt-body">
             <div className="qpanel">
               {q?.subject && (
-                <div className="section-banner" style={{background:getSubjColor(q.subject).light,borderColor:getSubjColor(q.subject).dot,color:getSubjColor(q.subject).bg}}>
-                  Section: <strong>{q.subject}</strong>
+                <div className="section-banner" style={{
+                  background: q.isBonus ? '#fff8e1' : getSubjColor(q.subject).light,
+                  borderColor: q.isBonus ? '#ff9800' : getSubjColor(q.subject).dot,
+                  color: q.isBonus ? '#e65100' : getSubjColor(q.subject).bg
+                }}>
+                  Section: <strong>{q.isBonus ? '🎁 Bonus' : q.subject}</strong>
                   {q.type==='INTEGER'&&<span className="type-badge int">Integer Type</span>}
                   {q.type==='MCQ'&&<span className="type-badge mcq">Single Correct</span>}
                 </div>
@@ -589,7 +627,7 @@ export default function TestZyro() {
                   {navSubjects.map(s => {
                     const sc=getSubjColor(s)
                     const indices=subjGroups[s]||[]
-                    const isActiveSection=activeNavSubj===s
+                    const isActiveSection=activeNavSubj===s && !inBonus
                     return (
                       <div key={s} className={`sb-section${isActiveSection?' active':''}`}>
                         <div className="sb-section-hdr"
@@ -621,6 +659,44 @@ export default function TestZyro() {
                       </div>
                     )
                   })}
+                  {/* Bonus section in sidebar */}
+                  {hasBonus && (
+                    <div className={`sb-section${inBonus?' active':''}`}>
+                      <div className="sb-section-hdr"
+                        style={{background:bonusUnlocked?'#fff8e1':'#f5f5f5',color:bonusUnlocked?'#e65100':'#aaa',borderLeft:`4px solid ${bonusUnlocked?'#ff9800':'#ccc'}`}}
+                        onClick={()=>{
+                          if(!bonusUnlocked){
+                            const rem=mainIndices.filter(i=>ans[i]===null||ans[i]===undefined).length
+                            alert(`⚠️ Attempt all ${mainIndices.length} main questions first!\n${rem} still unanswered.`)
+                            return
+                          }
+                          setActiveNavSubj('Bonus')
+                          if(bonusIndices[0]!==undefined) goTo(bonusIndices[0])
+                        }}>
+                        <span className="sb-section-label">{bonusUnlocked?'🎁':'🔒'}</span>
+                        <span className="sb-section-name">Bonus</span>
+                        <span className="sb-section-count">
+                          {bonusUnlocked
+                            ? `${bonusIndices.filter(i=>ans[i]&&ans[i]!=='skip').length}/${bonusIndices.length}`
+                            : 'Locked'}
+                        </span>
+                      </div>
+                      {inBonus && bonusUnlocked && (
+                        <div className="qgrid">
+                          {bonusIndices.map(i=>{
+                            const state=getDotState(i), isCur=i===cur
+                            return (
+                              <div key={i} className={`qdot${isCur?' current':' '+state}`}
+                                onClick={()=>{goTo(i);setActiveNavSubj('Bonus')}} style={{position:'relative'}}>
+                                {i+1}
+                                {state==='answered-marked'&&<span className="dot-arrow">▸</span>}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="qgrid" style={{padding:'8px'}}>
@@ -816,6 +892,11 @@ body{background:#f5f5f5;color:#212121;font-family:'Roboto',sans-serif;min-height
 .subj-tabs{background:#eeeeee;border-bottom:1px solid #ccc;display:flex;overflow-x:auto;flex-shrink:0}
 .subj-tab{display:flex;align-items:center;gap:6px;padding:8px 16px;border:none;border-right:1px solid #ccc;background:transparent;cursor:pointer;font-family:'Roboto',sans-serif;font-size:.78rem;font-weight:500;color:#555;white-space:nowrap;transition:all .15s;flex-shrink:0}
 .subj-tab:hover{background:#e0e0e0;color:#212121}.subj-tab.active{font-weight:700;color:white}
+.bonus-tab.locked{color:#aaa;border-right:1px solid #ccc;background:#f9f9f9}
+.bonus-tab.locked:hover{background:#f0f0f0}
+.bonus-tab.unlocked{color:#e65100;background:#fff8e1}
+.bonus-tab.unlocked:hover{background:#ffecb3}
+.bonus-tab.unlocked.active{background:#e65100!important;color:white!important;border-color:#e65100!important}
 .subj-tab-label{font-family:'Roboto Mono',monospace;font-size:.65rem;font-weight:700;background:rgba(0,0,0,.15);padding:1px 5px;border-radius:3px}
 .subj-tab-name{font-size:.78rem}
 .subj-tab-count{font-family:'Roboto Mono',monospace;font-size:.65rem;background:rgba(0,0,0,.12);padding:1px 6px;border-radius:10px}
