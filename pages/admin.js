@@ -30,7 +30,7 @@ async function loadJSZip() {
 }
 
 // Process BITSAT zip entirely in browser
-async function processBitsatZip(file, testName, onProgress, bonusFile=null, bonusAnswers=[]) {
+async function processBitsatZip(file, testName, onProgress) {
   const JSZip = await loadJSZip()
   onProgress('Reading zip file...')
   const zip = await JSZip.loadAsync(file)
@@ -81,18 +81,20 @@ async function processBitsatZip(file, testName, onProgress, bonusFile=null, bonu
       return !DISPLAY_ORDER.includes(norm) && !DISPLAY_ORDER.includes(s)
     })
   ]
-  // Actually just use pcd keys directly in display order
+  // Actually just use pcd keys directly in display order — Bonus always last
   const finalOrder = [
     ...pcdSubjects.filter(s => ['Physics'].includes(s)),
     ...pcdSubjects.filter(s => ['Chemistry'].includes(s)),
     ...pcdSubjects.filter(s => ['Maths','Mathematics','Math'].includes(s)),
     ...pcdSubjects.filter(s => ['English & LR','English','English & Logical Reasoning'].includes(s)),
-    ...pcdSubjects.filter(s => !['Physics','Chemistry','Maths','Mathematics','Math','English & LR','English','English & Logical Reasoning'].includes(s)),
+    ...pcdSubjects.filter(s => !['Physics','Chemistry','Maths','Mathematics','Math','English & LR','English','English & Logical Reasoning','Bonus'].includes(s)),
+    ...pcdSubjects.filter(s => ['Bonus'].includes(s)), // Bonus always last
   ]
 
   for (const subj of finalOrder) {
     const subjData = pcd[subj]
-    const normalizedSubj = normalizeSubj(subj)  // e.g. Mathematics → Maths
+    const normalizedSubj = normalizeSubj(subj)
+    const isBonus = subj === 'Bonus' || normalizedSubj === 'Bonus'
 
     for (const [sectionName, sectionQs] of Object.entries(subjData)) {
       const ansSection = (ak[subj] || {})[sectionName] || {}
@@ -116,7 +118,8 @@ async function processBitsatZip(file, testName, onProgress, bonusFile=null, bonu
         const numOpts = parseInt(q.answerOptions) || 4
         questions.push({
           qnum: globalQnum,
-          subject: normalizedSubj,   // always save normalized name for CBT nav
+          subject: isBonus ? 'Bonus' : normalizedSubj,
+          isBonus: isBonus || undefined,
           type: q.type === 'mcq' ? 'MCQ' : 'INTEGER',
           text: `Q${globalQnum}`,
           opts: ['A','B','C','D'].slice(0, numOpts),
@@ -132,59 +135,7 @@ async function processBitsatZip(file, testName, onProgress, bonusFile=null, bonu
 
   if (!questions.length) throw new Error('No questions found. Check zip format.')
 
-  // ── Process bonus questions if bonus zip provided ──────────────────────
-  if (bonusFile) {
-    onProgress('Loading bonus zip...')
-    const bonusZip = await JSZip.loadAsync(bonusFile)
-    const bonusImageMap = {}
-    const bonusImgPromises = []
-    bonusZip.forEach((relPath, zipEntry) => {
-      const filename = relPath.split('/').pop()
-      if (!/\.(png|jpg|jpeg)$/i.test(filename)) return
-      const key = filename.replace(/\.(png|jpg|jpeg)$/i, '')
-      bonusImgPromises.push(
-        zipEntry.async('base64').then(b64 => { bonusImageMap[key] = b64 })
-      )
-    })
-    await Promise.all(bonusImgPromises)
-    onProgress(`Processing ${Object.keys(bonusImageMap).length} bonus images...`)
-
-    // Bonus images named: Bonus__--__131__--__1.png
-    // Get unique bonus qnums from image keys
-    const bonusQnums = [...new Set(
-      Object.keys(bonusImageMap)
-        .filter(k => k.startsWith('Bonus__--__'))
-        .map(k => k.split('__--__')[1])
-    )].map(Number).sort((a,b)=>a-b)
-
-    bonusQnums.forEach((qnum, idx) => {
-      const qnumStr = String(qnum)
-      const images = []
-      for (let i = 1; i <= 10; i++) {
-        const key = `Bonus__--__${qnumStr}__--__${i}`
-        if (bonusImageMap[key]) images.push(bonusImageMap[key])
-        else break
-      }
-      const localIdx = idx  // 0-based index into bonusAnswers
-      const ans = bonusAnswers[localIdx] || ''
-      questions.push({
-        qnum: globalQnum + idx + 1,
-        subject: 'Bonus',
-        isBonus: true,
-        type: 'MCQ',
-        text: `Bonus Q${idx + 1}`,
-        opts: ['A','B','C','D'],
-        ans: ans.toUpperCase().trim(),
-        hasImage: images.length > 0,
-        images,
-        mCor: 3,
-        mNeg: 1,
-      })
-    })
-    onProgress(`Added ${bonusQnums.length} bonus questions ✅`)
-  }
-
-  if (!questions.length) throw new Error('No questions found. Check zip format.')
+  const bonusCount = questions.filter(q => q.isBonus).length
 
   return {
     id: 'bitsat_' + Date.now(),
@@ -194,7 +145,7 @@ async function processBitsatZip(file, testName, onProgress, bonusFile=null, bonu
     mCor: 3,
     mNeg: 1,
     order: 999,
-    hasBonus: bonusFile != null,
+    hasBonus: bonusCount > 0,
     questions
   }
 }
@@ -219,12 +170,6 @@ export default function AdminPage() {
   const [result, setResult]       = useState(null)
   const [zipDrag, setZipDrag]     = useState(false)
   const zipRef = useRef()
-  // Bonus
-  const [hasBonus, setHasBonus]   = useState(false)
-  const [bonusFile, setBonusFile] = useState(null)
-  const [bonusCount, setBonusCount] = useState(12) // how many bonus qs
-  const [bonusAnswers, setBonusAnswers] = useState([]) // ['A','B',...]
-  const bonusRef = useRef()
 
   useEffect(() => {
     const t = localStorage.getItem(ADM_KEY)
@@ -273,17 +218,12 @@ export default function AdminPage() {
 
   const processZip = async () => {
     if (!zipFile || !testName.trim()) return
-    if (hasBonus && !bonusFile) { flash('Please upload the bonus zip too', false); return }
     setProcessing(true); setResult(null)
     try {
-      const testData = await processBitsatZip(
-        zipFile, testName.trim(), setProgress,
-        hasBonus ? bonusFile : null,
-        hasBonus ? bonusAnswers : []
-      )
+      const testData = await processBitsatZip(zipFile, testName.trim(), setProgress)
       setProgress('Done! ✅')
       setResult({ ok:true, testData, questions: testData.questions.length })
-      setZipFile(null); setTestName(''); setBonusFile(null); setHasBonus(false); setBonusAnswers([])
+      setZipFile(null); setTestName('')
     } catch(e) {
       setResult({ ok:false, error: e.message })
       flash('❌ '+e.message, false)
@@ -429,74 +369,6 @@ export default function AdminPage() {
                   <button className="proc-btn" onClick={processZip} disabled={processing||!testName.trim()}>
                     {processing ? <><span className="spin"/>Processing…</> : '⚡ Generate JSON'}
                   </button>
-                </div>
-              )}
-
-              {/* Bonus toggle */}
-              {zipFile && (
-                <div className="bonus-section">
-                  <div className="bonus-toggle-row">
-                    <label className="bonus-toggle-label">
-                      <input type="checkbox" checked={hasBonus} onChange={e=>{setHasBonus(e.target.checked);if(!e.target.checked){setBonusFile(null);setBonusAnswers([])}}}/>
-                      <span>This test has Bonus Questions</span>
-                    </label>
-                    <span className="bonus-note">Only unlocked after all main questions answered</span>
-                  </div>
-                  {hasBonus && (
-                    <div className="bonus-body">
-                      {/* Bonus zip upload */}
-                      <div className="bonus-zip-row">
-                        <div className="flabel">Bonus ZIP (images only)</div>
-                        {!bonusFile ? (
-                          <button className="bonus-pick-btn" onClick={()=>bonusRef.current.click()}>📦 Upload Bonus ZIP</button>
-                        ) : (
-                          <div className="bonus-file-row">
-                            <span className="bonus-file-name">📦 {bonusFile.name}</span>
-                            <button className="bonus-remove" onClick={()=>setBonusFile(null)}>✕</button>
-                          </div>
-                        )}
-                        <input ref={bonusRef} type="file" accept=".zip" style={{display:'none'}} onChange={e=>{
-                          const f=e.target.files[0]; if(!f) return
-                          setBonusFile(f)
-                          // auto-detect count from filename pattern if possible
-                        }}/>
-                      </div>
-                      {/* Bonus count */}
-                      <div className="bonus-count-row">
-                        <label className="flabel">Number of Bonus Questions</label>
-                        <input className="finput" style={{width:100}} type="number" min={1} max={30}
-                          value={bonusCount}
-                          onChange={e=>{
-                            const n=parseInt(e.target.value)||1
-                            setBonusCount(n)
-                            setBonusAnswers(prev=>{
-                              const arr=[...prev]
-                              while(arr.length<n) arr.push('')
-                              return arr.slice(0,n)
-                            })
-                          }}/>
-                      </div>
-                      {/* Answer key entry */}
-                      <div className="flabel" style={{marginBottom:6}}>Bonus Answer Key (A/B/C/D)</div>
-                      <div className="bonus-ans-grid">
-                        {Array.from({length:bonusCount},(_,i)=>(
-                          <div key={i} className="bonus-ans-cell">
-                            <span className="bonus-ans-num">B{i+1}</span>
-                            <select className="bonus-ans-sel"
-                              value={bonusAnswers[i]||''}
-                              onChange={e=>{
-                                const a=[...bonusAnswers]
-                                a[i]=e.target.value
-                                setBonusAnswers(a)
-                              }}>
-                              <option value="">?</option>
-                              {['A','B','C','D'].map(o=><option key={o} value={o}>{o}</option>)}
-                            </select>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
                 </div>
               )}
 

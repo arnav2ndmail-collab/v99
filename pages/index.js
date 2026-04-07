@@ -782,10 +782,17 @@ function SecTitle({children,style}) {
 }
 
 function TestCard({t,ci,onCBT,onDel}) {
+  const [loading, setLoading] = useState(false)
   const PALETTE=['#1a237e','#1b5e20','#b71c1c','#4a148c','#e65100','#006064','#37474f']
   const accent=t.accentColor||PALETTE[ci%PALETTE.length]
   const subj=t.subject||'BITSAT'
   const isBitsat=subj.toUpperCase().includes('BITSAT')
+  const handleStart = async () => {
+    if (loading) return
+    setLoading(true)
+    await onCBT()
+    setLoading(false)
+  }
   return (
     <div className="tc">
       <div style={{height:5,background:accent}}/>
@@ -803,10 +810,14 @@ function TestCard({t,ci,onCBT,onDel}) {
         {isBitsat&&(
           <div className="tc-sections">
             {['PHY','CHEM','MATH','ENG'].map(s=><span key={s} className="tc-section-dot">{s}</span>)}
+            {t.hasBonus&&<span className="tc-section-dot" style={{background:'#fff8e1',color:'#e65100',border:'1px solid #ffcc80'}}>🎁 BON</span>}
           </div>
         )}
+        {loading && <div className="tc-loading-notice">⏳ Loading test… please wait (3–5 sec)</div>}
         <div className="tc-actions">
-          <button className="tc-cbt-btn" style={{background:accent}} onClick={onCBT}>🎯 Start CBT</button>
+          <button className="tc-cbt-btn" style={{background: loading ? '#aaa' : accent, cursor: loading ? 'not-allowed' : 'pointer'}} onClick={handleStart} disabled={loading}>
+            {loading ? '⏳ Loading…' : '🎯 Start CBT'}
+          </button>
           {onDel&&<button className="tc-del-btn" onClick={onDel}>✕</button>}
         </div>
       </div>
@@ -866,6 +877,8 @@ body{background:#f5f5f5;color:#212121;font-family:'Roboto',sans-serif;min-height
 .tc-sections{display:flex;gap:4px;margin-bottom:12px;flex-wrap:wrap}
 .tc-section-dot{font-size:.6rem;font-weight:700;font-family:'Roboto Mono',monospace;padding:2px 6px;border-radius:3px;background:#f5f5f5;color:#555;border:1px solid #ddd}
 .tc-actions{display:flex;gap:7px}
+.tc-loading-notice{font-size:.72rem;color:#e65100;background:#fff8e1;border:1px solid #ffcc80;border-radius:5px;padding:5px 10px;margin-bottom:8px;font-weight:600;animation:pulse-txt .8s ease infinite}
+@keyframes pulse-txt{0%,100%{opacity:1}50%{opacity:.6}}
 .tc-cbt-btn{flex:1;padding:8px;border-radius:6px;font-family:'Roboto',sans-serif;font-weight:700;font-size:.78rem;cursor:pointer;border:none;color:white;transition:all .13s}
 .tc-cbt-btn:hover{opacity:.9}
 .tc-del-btn{padding:8px 12px;border-radius:6px;font-size:.72rem;cursor:pointer;border:1px solid #ffcdd2;background:#ffebee;color:#c62828}
