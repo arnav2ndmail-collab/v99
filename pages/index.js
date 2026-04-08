@@ -11,7 +11,6 @@ const ATTEMPTS_KEY = 'tz_attempts_v1'
 // ── EDIT THIS to update the "What's New" panel ────────────────────────────
 const WHATS_NEW = [
   { date: '08 Apr 2025', text: '🎁 Bonus questions — unlocks after all main Qs answered' },
-  { date: '08 Apr 2025', text: '⏸ Resume — close tab anytime, continue where you left off' },
   { date: '08 Apr 2025', text: '📊 Past Tests — analyse previous attempts directly' },
   { date: '07 Apr 2025', text: '📄 Solutions page — download answer key PDFs' },
 ]
