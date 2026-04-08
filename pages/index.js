@@ -9,7 +9,9 @@ const RESUME_KEY = 'tz_resume_v1'
 // ── EDIT THIS to update the "What's New" panel on the library page ─────────
 const WHATS_NEW = [
   { date: '08 Apr 2025', text: '🎁 Bonus questions added — unlocks after all main Qs attempted' },
+  { date: '08 Apr 2025', text: '⏸ Resume feature — close tab anytime, continue where you left off' },
   { date: '07 Apr 2025', text: '📄 Solutions page — download answer key PDFs by series' },
+  { date: '06 Apr 2025', text: '🔢 Test sorting fixed — tests now appear in correct order (1,2,3…10)' },
 ]
 // ──────────────────────────────────────────────────────────────────────────  // auto-saved in-progress test
 
@@ -115,6 +117,7 @@ export default function TestZyro() {
       setActiveNavSubj(null)
     }
     setCbtOn(true)
+    setCbtLoading(false) // ← always reset after launch
     startRef.current = Date.now()
     clearInterval(timerRef.current)
     // Save immediately so resume works even if window closed right away
@@ -174,8 +177,24 @@ export default function TestZyro() {
   const exitCBT = () => {
     if (!confirm('Exit? Progress is auto-saved — you can resume later.')) return
     clearInterval(timerRef.current)
-    saveProgress() // save immediately before exit
-    setCbtOn(false); setResult(null)
+    // Save progress synchronously to localStorage
+    try {
+      const saveData = {
+        cfg: cbtStateRef.current.cfg,
+        Qs: cbtStateRef.current.Qs,
+        ans: cbtAns.current,
+        marked: cbtStateRef.current.marked,
+        visited: cbtStateRef.current.visited,
+        cur: cbtStateRef.current.cur,
+        elapsed: Math.round((Date.now() - startRef.current) / 1000),
+        savedAt: Date.now()
+      }
+      localStorage.setItem(RESUME_KEY, JSON.stringify(saveData))
+      setResumeData(saveData) // ← show banner immediately
+    } catch(e) {}
+    setCbtLoading(false) // ← reset so buttons work again
+    setCbtOn(false)
+    setResult(null)
   }
 
   // Resume a saved test
@@ -816,7 +835,7 @@ export default function TestZyro() {
             <div className="res-actions">
               <button className="btn-download" onClick={()=>downloadOutputFile(result)}>📥 Download Output File</button>
               <button className="btn-review" onClick={()=>{setReviewing(true);setResult(null);setCur(0)}}>📖 Review Answers</button>
-              <button className="btn-back-lib" onClick={()=>{setResult(null);setCbtOn(false);setPage('library')}}>📚 Library</button>
+              <button className="btn-back-lib" onClick={()=>{setResult(null);setCbtOn(false);setCbtLoading(false);setPage('library')}}>📚 Library</button>
             </div>
             <div className="res-download-note">
               💡 Download the output file to analyse on the <strong>Test Analyser</strong> page
