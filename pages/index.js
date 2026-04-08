@@ -4,7 +4,16 @@ import Head from 'next/head'
 const pad = n => String(n).padStart(2,'0')
 const fmt = s => `${pad(Math.floor(s/3600))}:${pad(Math.floor((s%3600)/60))}:${pad(s%60)}`
 const SAVED_KEY  = 'tz_saved_v3'
-const RESUME_KEY = 'tz_resume_v1'  // auto-saved in-progress test
+const RESUME_KEY = 'tz_resume_v1'
+
+// ── EDIT THIS to update the "What's New" panel on the library page ─────────
+const WHATS_NEW = [
+  { date: '08 Apr 2025', text: '🎁 Bonus questions added — unlocks after all main Qs attempted' },
+  { date: '08 Apr 2025', text: '⏸ Resume feature — close tab anytime, continue where you left off' },
+  { date: '07 Apr 2025', text: '📄 Solutions page — download answer key PDFs by series' },
+  { date: '06 Apr 2025', text: '🔢 Test sorting fixed — tests now appear in correct order (1,2,3…10)' },
+]
+// ──────────────────────────────────────────────────────────────────────────  // auto-saved in-progress test
 
 const BITSAT_SUBJECTS = ['Physics','Chemistry','Maths','English & LR']
 const SUBJECT_COLORS = {
@@ -38,7 +47,8 @@ export default function TestZyro() {
   const [result, setResult] = useState(null)
   const [activeNavSubj, setActiveNavSubj] = useState(null)
   const [uploadMsg, setUploadMsg] = useState('')
-  const [resumeData, setResumeData] = useState(null) // saved in-progress test
+  const [resumeData, setResumeData] = useState(null)
+  const [cbtLoading, setCbtLoading] = useState(false) // global — blocks ALL start buttons // saved in-progress test
   const timerRef = useRef(null)
   const startRef = useRef(null)
   const cbtAns = useRef([])
@@ -74,15 +84,19 @@ export default function TestZyro() {
   }
 
   const startFromTree = async (testPath) => {
+    if (cbtLoading) return
+    setCbtLoading(true)
     try {
       const r = await fetch(`/api/test/${testPath}`)
       const d = await r.json()
       if (!d.questions) throw new Error('bad file')
       doLaunch(d.questions, { title:d.title, dur:d.dur||180, mCor:d.mCor||3, mNeg:d.mNeg||1, id:d.id||testPath, subject:d.subject, pageImages:d.pageImages||null })
-    } catch(e) { alert('Failed: '+e.message) }
+    } catch(e) { alert('Failed: '+e.message); setCbtLoading(false) }
   }
 
   const startFromSaved = (t) => {
+    if (cbtLoading) return
+    setCbtLoading(true)
     doLaunch(t.questions, { title:t.title, dur:t.dur||180, mCor:t.mCor||3, mNeg:t.mNeg||1, id:t.id, subject:t.subject })
   }
 
@@ -208,14 +222,33 @@ export default function TestZyro() {
   const saveAndNext = () => {
     markVisited(cur)
     setMarked(prev => { const m=[...prev]; m[cur]=false; return m })
-    if (cur < Qs.length-1) setCur(c=>c+1)
+    // Find next non-bonus question (skip bonus if not unlocked)
+    let next = cur + 1
+    while (next < Qs.length) {
+      if (!Qs[next]?.isBonus) break  // always allow main qs
+      // bonus q — only go there if unlocked
+      const mIdxs = Qs.map((_,i)=>i).filter(i=>!Qs[i].isBonus)
+      const done = mIdxs.every(i => cbtAns.current[i] !== null && cbtAns.current[i] !== undefined)
+      if (done) break
+      next++  // skip this bonus q
+    }
+    if (next < Qs.length) setCur(next)
   }
 
   const markForReview = () => {
     markVisited(cur)
     setMarked(prev => { const m=[...prev]; m[cur]=true; return m })
     if (!ans[cur] || ans[cur] === 'skip') setAnswer('skip')
-    if (cur < Qs.length-1) setCur(c=>c+1)
+    // Same logic — skip bonus if not unlocked
+    let next = cur + 1
+    while (next < Qs.length) {
+      if (!Qs[next]?.isBonus) break
+      const mIdxs = Qs.map((_,i)=>i).filter(i=>!Qs[i].isBonus)
+      const done = mIdxs.every(i => cbtAns.current[i] !== null && cbtAns.current[i] !== undefined)
+      if (done) break
+      next++
+    }
+    if (next < Qs.length) setCur(next)
   }
 
   const clearQ = () => {
@@ -353,7 +386,7 @@ export default function TestZyro() {
         {(tr.tests||[]).filter(filt).length>0&&(
           <div className="test-grid" style={{marginTop:depth>0?10:0}}>
             {(tr.tests||[]).filter(filt).map((t,i)=>(
-              <TestCard key={t.path||t.id} t={t} ci={i} onCBT={()=>startFromTree(t.path)}/>
+              <TestCard key={t.path||t.id} t={t} ci={i} globalLoading={cbtLoading} onCBT={()=>startFromTree(t.path)}/>
             ))}
           </div>
         )}
@@ -445,6 +478,21 @@ export default function TestZyro() {
             <div><h2>📚 Test Library</h2><p>BITSAT Full Mock Tests — CBT mode</p></div>
             <button className="btn-sm" onClick={loadTree}>🔄 Refresh</button>
           </div>
+
+          {/* What's New */}
+          {WHATS_NEW.length > 0 && (
+            <div className="whats-new">
+              <div className="wn-title">🆕 What's New</div>
+              <div className="wn-list">
+                {WHATS_NEW.map((item, i) => (
+                  <div key={i} className="wn-item">
+                    <span className="wn-date">{item.date}</span>
+                    <span className="wn-text">{item.text}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="toolbar">
             <input className="search-inp" placeholder="🔍 Search tests…" value={search} onChange={e=>setSearch(e.target.value)}/>
             <div className="fbtns">{['all','BITSAT'].map(f=><button key={f} className={`fbtn${filter===f?' on':''}`} onClick={()=>setFilter(f)}>{f.toUpperCase()}</button>)}</div>
@@ -453,7 +501,7 @@ export default function TestZyro() {
           {treeLoad ? <div className="loading-txt">Loading…</div> : renderTree(tree)}
           {savedTests.filter(filt).length>0&&<>
             <SecTitle style={{marginTop:32}}>💾 Saved Tests</SecTitle>
-            <div className="test-grid">{savedTests.filter(filt).map((t,i)=><TestCard key={t.id} t={t} ci={i} onCBT={()=>startFromSaved(t)} onDel={()=>{if(confirm('Delete?')){const l=savedTests.filter(x=>x.id!==t.id);setSavedTests(l);try{localStorage.setItem(SAVED_KEY,JSON.stringify(l))}catch(e){}}}}/>)}</div>
+            <div className="test-grid">{savedTests.filter(filt).map((t,i)=><TestCard key={t.id} t={t} ci={i} globalLoading={cbtLoading} onCBT={()=>startFromSaved(t)} onDel={()=>{if(confirm('Delete?')){const l=savedTests.filter(x=>x.id!==t.id);setSavedTests(l);try{localStorage.setItem(SAVED_KEY,JSON.stringify(l))}catch(e){}}}}/>)}</div>
           </>}
         </div>
       )}
@@ -603,7 +651,12 @@ export default function TestZyro() {
               )}
               <div className="nav-row">
                 <button className="btn-prev" onClick={()=>goTo(Math.max(0,cur-1))}>← Previous</button>
-                <button className="btn-next" onClick={()=>goTo(Math.min(Qs.length-1,cur+1))}>Next →</button>
+                <button className="btn-next" onClick={()=>{
+                  let next = cur + 1
+                  // Skip into bonus only if unlocked
+                  if (next < Qs.length && Qs[next]?.isBonus && !bonusUnlocked) return
+                  if (next < Qs.length) goTo(next)
+                }}>Next →</button>
               </div>
             </div>
 
@@ -781,20 +834,13 @@ function SecTitle({children,style}) {
   return <div style={{fontSize:'.7rem',fontFamily:'Roboto Mono,monospace',color:'#888',letterSpacing:2,textTransform:'uppercase',marginBottom:12,display:'flex',alignItems:'center',gap:10,...style}}>{children}<div style={{flex:1,height:1,background:'#e0e0e0'}}/></div>
 }
 
-function TestCard({t,ci,onCBT,onDel}) {
-  const [loading, setLoading] = useState(false)
+function TestCard({t, ci, onCBT, onDel, globalLoading}) {
   const PALETTE=['#1a237e','#1b5e20','#b71c1c','#4a148c','#e65100','#006064','#37474f']
-  const accent=t.accentColor||PALETTE[ci%PALETTE.length]
-  const subj=t.subject||'BITSAT'
-  const isBitsat=subj.toUpperCase().includes('BITSAT')
-  const handleStart = async () => {
-    if (loading) return
-    setLoading(true)
-    await onCBT()
-    setLoading(false)
-  }
+  const accent = t.accentColor||PALETTE[ci%PALETTE.length]
+  const subj = t.subject||'BITSAT'
+  const isBitsat = subj.toUpperCase().includes('BITSAT')
   return (
-    <div className="tc">
+    <div className={`tc${globalLoading?' tc-dimmed':''}`}>
       <div style={{height:5,background:accent}}/>
       <div style={{padding:'14px 16px 16px'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
@@ -813,12 +859,15 @@ function TestCard({t,ci,onCBT,onDel}) {
             {t.hasBonus&&<span className="tc-section-dot" style={{background:'#fff8e1',color:'#e65100',border:'1px solid #ffcc80'}}>🎁 BON</span>}
           </div>
         )}
-        {loading && <div className="tc-loading-notice">⏳ Loading test… please wait (3–5 sec)</div>}
+        {globalLoading && <div className="tc-loading-notice">⏳ Loading test… please wait</div>}
         <div className="tc-actions">
-          <button className="tc-cbt-btn" style={{background: loading ? '#aaa' : accent, cursor: loading ? 'not-allowed' : 'pointer'}} onClick={handleStart} disabled={loading}>
-            {loading ? '⏳ Loading…' : '🎯 Start CBT'}
+          <button className="tc-cbt-btn"
+            style={{background: globalLoading ? '#9e9e9e' : accent, cursor: globalLoading ? 'not-allowed' : 'pointer'}}
+            onClick={globalLoading ? undefined : onCBT}
+            disabled={globalLoading}>
+            {globalLoading ? '⏳ Loading…' : '🎯 Start CBT'}
           </button>
-          {onDel&&<button className="tc-del-btn" onClick={onDel}>✕</button>}
+          {onDel&&!globalLoading&&<button className="tc-del-btn" onClick={onDel}>✕</button>}
         </div>
       </div>
     </div>
@@ -858,6 +907,13 @@ body{background:#f5f5f5;color:#212121;font-family:'Roboto',sans-serif;min-height
 .loading-txt{color:#888;font-size:.82rem;padding:16px 0}
 .test-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
 .flash-msg{background:#e8f5e9;border:1px solid #4caf50;color:#1b5e20;padding:10px 16px;border-radius:6px;margin-bottom:14px;font-size:.83rem;font-weight:500}
+/* What's New */
+.whats-new{background:white;border:1px solid #e8eaf6;border-left:4px solid #1a237e;border-radius:8px;padding:12px 16px;margin-bottom:18px}
+.wn-title{font-size:.72rem;font-weight:800;color:#1a237e;text-transform:uppercase;letter-spacing:1px;font-family:'Roboto Mono',monospace;margin-bottom:8px}
+.wn-list{display:flex;flex-direction:column;gap:5px}
+.wn-item{display:flex;align-items:baseline;gap:10px;font-size:.8rem}
+.wn-date{font-family:'Roboto Mono',monospace;font-size:.65rem;color:#aaa;flex-shrink:0;min-width:80px}
+.wn-text{color:#333}
 .resume-banner{background:linear-gradient(135deg,#1a237e,#283593);border-radius:10px;padding:16px 20px;margin-bottom:20px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;box-shadow:0 4px 16px rgba(26,35,126,.3);animation:pulse-border 2s ease infinite}
 @keyframes pulse-border{0%,100%{box-shadow:0 4px 16px rgba(26,35,126,.3)}50%{box-shadow:0 4px 24px rgba(26,35,126,.55)}}
 .resume-banner-left{display:flex;align-items:center;gap:12px;flex:1}
@@ -871,6 +927,8 @@ body{background:#f5f5f5;color:#212121;font-family:'Roboto',sans-serif;min-height
 .discard-btn:hover{background:rgba(255,255,255,.2)}
 .tc{background:white;border:1px solid #e0e0e0;border-radius:8px;overflow:hidden;transition:all .18s;box-shadow:0 1px 4px rgba(0,0,0,.08)}
 .tc:hover{transform:translateY(-2px);box-shadow:0 4px 16px rgba(0,0,0,.12)}
+.tc-dimmed{opacity:.65;pointer-events:none}
+.tc-dimmed .tc-cbt-btn{background:#9e9e9e!important}
 .tc-badge{font-size:.62rem;font-weight:700;padding:3px 9px;border-radius:20px;font-family:'Roboto Mono',monospace}
 .tc-title{font-weight:700;font-size:.92rem;color:#212121;margin-bottom:8px;line-height:1.35}
 .tc-meta{display:flex;gap:6px;font-size:.72rem;color:#888;font-family:'Roboto Mono',monospace;margin-bottom:10px;flex-wrap:wrap}
