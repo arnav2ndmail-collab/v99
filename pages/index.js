@@ -3,69 +3,83 @@ import Head from 'next/head'
 
 const pad = n => String(n).padStart(2,'0')
 const fmt = s => `${pad(Math.floor(s/3600))}:${pad(Math.floor((s%3600)/60))}:${pad(s%60)}`
-const SAVED_KEY  = 'tz_saved_v3'
-const RESUME_KEY = 'tz_resume_v1'
+const fmtDate = iso => { try { const d=new Date(iso); return d.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'})+' '+d.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}) } catch(e){return iso} }
+const SAVED_KEY   = 'tz_saved_v3'
+const RESUME_KEY  = 'tz_resume_v1'
+const ATTEMPTS_KEY = 'tz_attempts_v1'
 
-// ── EDIT THIS to update the "What's New" panel on the library page ─────────
+// ── EDIT THIS to update the "What's New" panel ────────────────────────────
 const WHATS_NEW = [
-  { date: '08 Apr 2025', text: '🎁 Bonus questions added — unlocks after all main Qs attempted' },
-  { date: '08 Apr 2025', text: '⏸ Resume feature — close tab anytime, continue where you left off' },
-  { date: '07 Apr 2025', text: '📄 Solutions page — download answer key PDFs by series' },
-  { date: '06 Apr 2025', text: '🔢 Test sorting fixed — tests now appear in correct order (1,2,3…10)' },
+  { date: '08 Apr 2025', text: '🎁 Bonus questions — unlocks after all main Qs answered' },
+  { date: '08 Apr 2025', text: '⏸ Resume — close tab anytime, continue where you left off' },
+  { date: '08 Apr 2025', text: '📊 Past Tests — analyse previous attempts directly' },
+  { date: '07 Apr 2025', text: '📄 Solutions page — download answer key PDFs' },
 ]
-// ──────────────────────────────────────────────────────────────────────────  // auto-saved in-progress test
+// ─────────────────────────────────────────────────────────────────────────
 
 const BITSAT_SUBJECTS = ['Physics','Chemistry','Maths','English & LR']
 const SUBJECT_COLORS = {
   'Physics':      { bg:'#1a237e', light:'#e8eaf6', dot:'#3949ab', label:'PHY' },
   'Chemistry':    { bg:'#1b5e20', light:'#e8f5e9', dot:'#388e3c', label:'CHEM' },
   'Maths':        { bg:'#b71c1c', light:'#ffebee', dot:'#c62828', label:'MATH' },
-  'English & LR': { bg:'#4a148c', light:'#f3e5f5', dot:'#7b1fa2', label:'ENG' },
+  'English & LR': { bg:'#4a148c', light:'#f3e5f5', dot:'#7b1fa2', label:'ENG'  },
 }
 function getSubjColor(subj) {
   return SUBJECT_COLORS[subj] || { bg:'#37474f', light:'#eceff1', dot:'#546e7a', label:'Q' }
 }
 
+// Strip images from Qs before saving to localStorage (avoid quota errors)
+function stripImages(qs) {
+  return qs.map(q => { const {images, ...rest} = q; return rest })
+}
+
 export default function TestZyro() {
-  const [page, setPage] = useState('library')
-  const [tree, setTree] = useState({ folders:{}, tests:[] })
+  const [page, setPage]             = useState('library')
+  const [tree, setTree]             = useState({ folders:{}, tests:[] })
   const [savedTests, setSavedTests] = useState([])
-  const [filter, setFilter] = useState('all')
-  const [search, setSearch] = useState('')
+  const [filter, setFilter]         = useState('all')
+  const [search, setSearch]         = useState('')
   const [openFolders, setOpenFolders] = useState({})
-  const [treeLoad, setTreeLoad] = useState(true)
-  const [cbtOn, setCbtOn] = useState(false)
-  const [Qs, setQs] = useState([])
-  const [ans, setAns] = useState([])      // null | 'A'|'B'|'C'|'D'|number string
-  const [marked, setMarked] = useState([]) // bool[] — marked for review
-  const [visited, setVisited] = useState([]) // bool[] — visited at least once
-  const [cur, setCur] = useState(0)
-  const [secs, setSecs] = useState(0)
-  const [done, setDone] = useState(false)
-  const [reviewing, setReviewing] = useState(false)
-  const [cfg, setCfg] = useState({})
-  const [result, setResult] = useState(null)
+  const [treeLoad, setTreeLoad]     = useState(true)
+  const [cbtOn, setCbtOn]           = useState(false)
+  const [Qs, setQs]                 = useState([])
+  const [ans, setAns]               = useState([])
+  const [marked, setMarked]         = useState([])
+  const [visited, setVisited]       = useState([])
+  const [cur, setCur]               = useState(0)
+  const [secs, setSecs]             = useState(0)
+  const [done, setDone]             = useState(false)
+  const [reviewing, setReviewing]   = useState(false)
+  const [cfg, setCfg]               = useState({})
+  const [result, setResult]         = useState(null)
   const [activeNavSubj, setActiveNavSubj] = useState(null)
-  const [uploadMsg, setUploadMsg] = useState('')
+  const [uploadMsg, setUploadMsg]   = useState('')
   const [resumeData, setResumeData] = useState(null)
-  const [cbtLoading, setCbtLoading] = useState(false) // global — blocks ALL start buttons // saved in-progress test
-  const timerRef = useRef(null)
-  const startRef = useRef(null)
-  const cbtAns = useRef([])
+  const [cbtLoading, setCbtLoading] = useState(false)
+  const [attempts, setAttempts]     = useState([]) // past test attempts
+  const [analyseAttempt, setAnalyseAttempt] = useState(null) // attempt being analysed
+
+  const timerRef  = useRef(null)
+  const startRef  = useRef(null)
+  const cbtAns    = useRef([])
+  const cbtStateRef = useRef({})
+
+  // Keep ref fresh every render
+  useEffect(() => {
+    cbtStateRef.current = { cbtOn, done, Qs, cfg, marked, visited, cur }
+  })
 
   useEffect(() => {
     setSavedTests(JSON.parse(localStorage.getItem(SAVED_KEY)||'[]'))
-    // Check for a resumable test
+    setAttempts(JSON.parse(localStorage.getItem(ATTEMPTS_KEY)||'[]'))
+    // Load resume
     try {
       const saved = localStorage.getItem(RESUME_KEY)
       if (saved) {
         const rd = JSON.parse(saved)
-        if (rd && rd.Qs?.length > 0 && rd.cfg && rd.savedAt &&
-            Date.now() - rd.savedAt < 6*60*60*1000) {
+        if (rd?.cfg && rd?.savedAt && Date.now()-rd.savedAt < 6*60*60*1000) {
           setResumeData(rd)
-        } else {
-          localStorage.removeItem(RESUME_KEY)
-        }
+        } else { localStorage.removeItem(RESUME_KEY) }
       }
     } catch(e) { localStorage.removeItem(RESUME_KEY) }
     loadTree()
@@ -74,8 +88,7 @@ export default function TestZyro() {
   const loadTree = async () => {
     setTreeLoad(true)
     try {
-      const r = await fetch('/api/tests')
-      const d = await r.json()
+      const r = await fetch('/api/tests'); const d = await r.json()
       setTree(d)
       const keys = Object.keys(d.folders||{})
       if (keys.length) setOpenFolders({ [keys[0]]: true })
@@ -111,111 +124,92 @@ export default function TestZyro() {
     setCur(0); setDone(false); setReviewing(false); setResult(null)
     setSecs(c.dur*60)
     if (isBITSAT(c.subject||'')) {
-      const firstSubj = qs.find(q => q.subject)?.subject || BITSAT_SUBJECTS[0]
+      const firstSubj = qs.find(q=>q.subject)?.subject || BITSAT_SUBJECTS[0]
       setActiveNavSubj(firstSubj)
-    } else {
-      setActiveNavSubj(null)
-    }
+    } else { setActiveNavSubj(null) }
     setCbtOn(true)
-    setCbtLoading(false) // ← always reset after launch
+    setCbtLoading(false)
     startRef.current = Date.now()
     clearInterval(timerRef.current)
-    // Save immediately so resume works even if window closed right away
-    setTimeout(() => {
-      try {
-        localStorage.setItem(RESUME_KEY, JSON.stringify({
-          cfg: c, Qs: qs, ans: blankAns,
-          marked: new Array(qs.length).fill(false),
-          visited: new Array(qs.length).fill(false),
-          cur: 0, elapsed: 0, savedAt: Date.now()
-        }))
-      } catch(e) {}
-    }, 300)
+    // Save immediately (images stripped to avoid localStorage quota)
+    try {
+      localStorage.setItem(RESUME_KEY, JSON.stringify({
+        cfg: c, Qs: stripImages(qs), ans: blankAns,
+        marked: new Array(qs.length).fill(false),
+        visited: new Array(qs.length).fill(false),
+        cur: 0, elapsed: 0, savedAt: Date.now()
+      }))
+    } catch(e) {}
   }
 
+  // Timer
   useEffect(() => {
     if (!cbtOn || done) { clearInterval(timerRef.current); return }
     timerRef.current = setInterval(() => setSecs(s => {
-      if (s <= 1) { clearInterval(timerRef.current); doSubmit(true); return 0 }
-      return s - 1
+      if (s<=1) { clearInterval(timerRef.current); doSubmit(true); return 0 }
+      return s-1
     }), 1000)
     return () => clearInterval(timerRef.current)
   }, [cbtOn, done])
 
-  // Ref always has fresh state — avoids stale closure in saveProgress
-  const cbtStateRef = useRef({})
-  useEffect(() => {
-    cbtStateRef.current = { cbtOn, done, Qs, cfg, marked, visited, cur }
-  })
-
-  // Stable save function — reads from ref so never stale
+  // saveProgress — reads from ref, no stale closure
   const saveProgress = useCallback(() => {
     const s = cbtStateRef.current
     if (!s.cbtOn || s.done || !s.Qs?.length) return
     try {
       const saveData = {
-        cfg: s.cfg, Qs: s.Qs, ans: cbtAns.current,
+        cfg: s.cfg,
+        Qs: stripImages(s.Qs),  // strip images!
+        ans: cbtAns.current,
         marked: s.marked, visited: s.visited, cur: s.cur,
         elapsed: Math.round((Date.now() - startRef.current) / 1000),
         savedAt: Date.now()
       }
       localStorage.setItem(RESUME_KEY, JSON.stringify(saveData))
-    } catch(e) {}
-  }, []) // no deps — always reads fresh from ref
+    } catch(e) { console.warn('saveProgress failed:', e.message) }
+  }, [])
 
-  // Register once when CBT starts, remove when it ends
+  // Register auto-save once when CBT starts
   useEffect(() => {
     if (!cbtOn || done) return
     const interval = setInterval(saveProgress, 10000)
     window.addEventListener('beforeunload', saveProgress)
-    return () => {
-      clearInterval(interval)
-      window.removeEventListener('beforeunload', saveProgress)
-    }
-  }, [cbtOn, done]) // saveProgress is stable so not needed in deps
+    return () => { clearInterval(interval); window.removeEventListener('beforeunload', saveProgress) }
+  }, [cbtOn, done])
 
   const exitCBT = () => {
-    if (!confirm('Exit? Progress is auto-saved — you can resume later.')) return
+    if (!confirm('Exit? Progress saved — resume anytime.')) return
     clearInterval(timerRef.current)
-    // Save progress synchronously to localStorage
+    // Save synchronously using ref data
     try {
+      const s = cbtStateRef.current
       const saveData = {
-        cfg: cbtStateRef.current.cfg,
-        Qs: cbtStateRef.current.Qs,
-        ans: cbtAns.current,
-        marked: cbtStateRef.current.marked,
-        visited: cbtStateRef.current.visited,
-        cur: cbtStateRef.current.cur,
+        cfg: s.cfg, Qs: stripImages(s.Qs), ans: cbtAns.current,
+        marked: s.marked, visited: s.visited, cur: s.cur,
         elapsed: Math.round((Date.now() - startRef.current) / 1000),
         savedAt: Date.now()
       }
       localStorage.setItem(RESUME_KEY, JSON.stringify(saveData))
-      setResumeData(saveData) // ← show banner immediately
+      setResumeData(saveData)
     } catch(e) {}
-    setCbtLoading(false) // ← reset so buttons work again
-    setCbtOn(false)
-    setResult(null)
+    setCbtLoading(false)
+    setCbtOn(false); setResult(null)
   }
 
-  // Resume a saved test
   const resumeTest = (rd) => {
+    // rd.Qs has no images — that's fine, questions still render text
     setQs(rd.Qs); setCfg(rd.cfg)
     setAns(rd.ans); cbtAns.current = rd.ans
     setMarked(rd.marked || new Array(rd.Qs.length).fill(false))
     setVisited(rd.visited || new Array(rd.Qs.length).fill(false))
     setCur(rd.cur || 0)
     setDone(false); setReviewing(false); setResult(null)
-    // Restore remaining time
-    const remainingSecs = Math.max(0, (rd.cfg.dur * 60) - rd.elapsed)
-    setSecs(remainingSecs)
+    setSecs(Math.max(0, (rd.cfg.dur*60) - rd.elapsed))
     if (isBITSAT(rd.cfg.subject||'')) {
-      const firstSubj = rd.Qs[rd.cur||0]?.subject || BITSAT_SUBJECTS[0]
-      setActiveNavSubj(firstSubj)
-    } else {
-      setActiveNavSubj(null)
-    }
+      setActiveNavSubj(rd.Qs[rd.cur||0]?.subject || BITSAT_SUBJECTS[0])
+    } else { setActiveNavSubj(null) }
     setCbtOn(true)
-    startRef.current = Date.now() - (rd.elapsed * 1000)
+    startRef.current = Date.now() - (rd.elapsed*1000)
     clearInterval(timerRef.current)
     setResumeData(null)
   }
@@ -226,10 +220,7 @@ export default function TestZyro() {
   }
 
   const setAnswer = useCallback((val) => {
-    setAns(prev => {
-      const a = [...prev]; a[cur] = val
-      cbtAns.current = a; return a
-    })
+    setAns(prev => { const a=[...prev]; a[cur]=val; cbtAns.current=a; return a })
   }, [cur])
 
   const markVisited = useCallback((idx) => {
@@ -239,32 +230,22 @@ export default function TestZyro() {
   const saveAndNext = () => {
     markVisited(cur)
     setMarked(prev => { const m=[...prev]; m[cur]=false; return m })
-    // Find next non-bonus question (skip bonus if not unlocked)
-    let next = cur + 1
-    while (next < Qs.length) {
-      if (!Qs[next]?.isBonus) break  // always allow main qs
-      // bonus q — only go there if unlocked
-      const mIdxs = Qs.map((_,i)=>i).filter(i=>!Qs[i].isBonus)
-      const done = mIdxs.every(i => cbtAns.current[i] !== null && cbtAns.current[i] !== undefined)
-      if (done) break
-      next++  // skip this bonus q
-    }
+    // Skip bonus if not unlocked
+    const mIdxs = Qs.map((_,i)=>i).filter(i=>!Qs[i]?.isBonus)
+    const bonusDone = mIdxs.every(i => cbtAns.current[i] !== null && cbtAns.current[i] !== undefined)
+    let next = cur+1
+    while (next < Qs.length && Qs[next]?.isBonus && !bonusDone) next++
     if (next < Qs.length) setCur(next)
   }
 
   const markForReview = () => {
     markVisited(cur)
     setMarked(prev => { const m=[...prev]; m[cur]=true; return m })
-    if (!ans[cur] || ans[cur] === 'skip') setAnswer('skip')
-    // Same logic — skip bonus if not unlocked
-    let next = cur + 1
-    while (next < Qs.length) {
-      if (!Qs[next]?.isBonus) break
-      const mIdxs = Qs.map((_,i)=>i).filter(i=>!Qs[i].isBonus)
-      const done = mIdxs.every(i => cbtAns.current[i] !== null && cbtAns.current[i] !== undefined)
-      if (done) break
-      next++
-    }
+    if (!ans[cur] || ans[cur]==='skip') setAnswer('skip')
+    const mIdxs = Qs.map((_,i)=>i).filter(i=>!Qs[i]?.isBonus)
+    const bonusDone = mIdxs.every(i => cbtAns.current[i] !== null && cbtAns.current[i] !== undefined)
+    let next = cur+1
+    while (next < Qs.length && Qs[next]?.isBonus && !bonusDone) next++
     if (next < Qs.length) setCur(next)
   }
 
@@ -273,170 +254,166 @@ export default function TestZyro() {
     setMarked(prev => { const m=[...prev]; m[cur]=false; return m })
   }
 
-  const goTo = (idx) => {
-    markVisited(cur)
-    setCur(idx)
-  }
+  const goTo = (idx) => { markVisited(cur); setCur(idx) }
 
   const doSubmit = useCallback((auto=false) => {
     if (!auto && !confirm('Submit test? This cannot be undone.')) return
     clearInterval(timerRef.current)
     const finalAns = cbtAns.current
-    const elapsed = Math.round((Date.now() - startRef.current)/1000)
+    const elapsed = Math.round((Date.now()-startRef.current)/1000)
     let cor=0,wrg=0,skp=0,un=0
     const subjStats = {}
     finalAns.forEach((a,i) => {
-      const q = Qs[i]
-      const ak = (q?.ans||'').toString().trim()
-      const subj = q?.subject || 'Other'
-      if (!subjStats[subj]) subjStats[subj] = { cor:0,wrg:0,skp:0,un:0 }
-      if (!a) { un++; subjStats[subj].un++; return }
-      if (a==='skip') { skp++; subjStats[subj].skp++; return }
-      const parts = ak.split(/\s+or\s+/i).map(s=>s.trim().toUpperCase())
-      if (parts.includes(a.toString().toUpperCase().trim())) { cor++; subjStats[subj].cor++ }
-      else { wrg++; subjStats[subj].wrg++ }
+      const q=Qs[i]; const ak=(q?.ans||'').toString().trim(); const subj=q?.subject||'Other'
+      if (!subjStats[subj]) subjStats[subj]={cor:0,wrg:0,skp:0,un:0}
+      if (!a){un++;subjStats[subj].un++;return}
+      if (a==='skip'){skp++;subjStats[subj].skp++;return}
+      const parts=ak.split(/\s+or\s+/i).map(s=>s.trim().toUpperCase())
+      if (parts.includes(a.toString().toUpperCase().trim())){cor++;subjStats[subj].cor++}
+      else{wrg++;subjStats[subj].wrg++}
     })
-    const score = cor*(cfg.mCor||3) - wrg*(cfg.mNeg||1)
-    const max = Qs.length*(cfg.mCor||3)
-    setResult({ cor,wrg,skp,un,score,max,elapsed,pct:Math.round(cor/Qs.length*100),answers:finalAns,subjStats })
-    setDone(true)
-    // Clear saved progress
+    const score=cor*(cfg.mCor||3)-wrg*(cfg.mNeg||1)
+    const max=Qs.length*(cfg.mCor||3)
+    const res={cor,wrg,skp,un,score,max,elapsed,pct:Math.round(cor/Qs.length*100),answers:finalAns,subjStats}
+    setResult(res); setDone(true)
+    // Clear resume
     try { localStorage.removeItem(RESUME_KEY) } catch(e) {}
+    setResumeData(null)
+    // Save attempt to localStorage
+    try {
+      const attempt = {
+        id: Date.now()+'_'+Math.random().toString(36).slice(2,6),
+        testId: cfg.id, testTitle: cfg.title, subject: cfg.subject,
+        date: new Date().toISOString(),
+        score: res.score, maxScore: res.max, accuracy: res.pct,
+        correct: res.cor, wrong: res.wrg, skipped: res.skp, unattempted: res.un,
+        duration: res.elapsed, marksCorrect: cfg.mCor, marksWrong: cfg.mNeg,
+        subjStats: res.subjStats,
+        questions: Qs.map((q,i)=>({
+          qnum:q.qnum||i+1, subject:q.subject||'Other', type:q.type,
+          text:q.text, opts:q.opts,
+          correctAnswer:q.ans, yourAnswer:finalAns[i],
+          result:!finalAns[i]?'unattempted':finalAns[i]==='skip'?'skipped':
+            ((q.ans||'').toUpperCase().trim()===(finalAns[i]||'').toUpperCase().trim())?'correct':'wrong'
+        }))
+      }
+      const prev = JSON.parse(localStorage.getItem(ATTEMPTS_KEY)||'[]')
+      // Remove old attempt for same test
+      const updated = [attempt, ...prev.filter(a=>a.testId!==cfg.id)].slice(0,30)
+      localStorage.setItem(ATTEMPTS_KEY, JSON.stringify(updated))
+      setAttempts(updated)
+    } catch(e) {}
   }, [Qs, cfg])
 
   const downloadOutputFile = (res) => {
-    const data = {
-      testId:cfg.id, testTitle:cfg.title, subject:cfg.subject,
-      date:new Date().toISOString(), score:res.score, maxScore:res.max,
-      correct:res.cor, wrong:res.wrg, skipped:res.skp, unattempted:res.un,
-      duration:res.elapsed, accuracy:res.pct, marksCorrect:cfg.mCor, marksWrong:cfg.mNeg,
+    const data={
+      testId:cfg.id,testTitle:cfg.title,subject:cfg.subject,
+      date:new Date().toISOString(),score:res.score,maxScore:res.max,
+      correct:res.cor,wrong:res.wrg,skipped:res.skp,unattempted:res.un,
+      duration:res.elapsed,accuracy:res.pct,marksCorrect:cfg.mCor,marksWrong:cfg.mNeg,
       subjStats:res.subjStats,
       questions:Qs.map((q,i)=>({
-        qnum:q.qnum||i+1, subject:q.subject||'Other', type:q.type, text:q.text,
-        opts:q.opts, images:q.images||null, hasImage:q.hasImage||false,
-        correctAnswer:q.ans, yourAnswer:res.answers[i],
-        result: !res.answers[i]?'unattempted':res.answers[i]==='skip'?'skipped':
+        qnum:q.qnum||i+1,subject:q.subject||'Other',type:q.type,text:q.text,
+        opts:q.opts,images:q.images||null,hasImage:q.hasImage||false,
+        correctAnswer:q.ans,yourAnswer:res.answers[i],
+        result:!res.answers[i]?'unattempted':res.answers[i]==='skip'?'skipped':
           ((q.ans||'').toUpperCase().trim()===(res.answers[i]||'').toUpperCase().trim())?'correct':'wrong'
       }))
     }
-    const blob = new Blob([JSON.stringify(data,null,2)],{type:'application/json'})
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a'); a.href=url
+    const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'})
+    const url=URL.createObjectURL(blob)
+    const a=document.createElement('a');a.href=url
     a.download=`${cfg.title||'test'}_result_${new Date().toISOString().slice(0,10)}.json`
-    a.click(); URL.revokeObjectURL(url)
+    a.click();URL.revokeObjectURL(url)
   }
 
   const onJsonFiles = async (files) => {
-    let ok=0, fail=0
-    const current = [...savedTests]
+    let ok=0,fail=0; const current=[...savedTests]
     for (const f of files) {
       try {
-        const d = JSON.parse(await f.text())
+        const d=JSON.parse(await f.text())
         if (!Array.isArray(d.questions)) throw new Error('no questions')
-        current.unshift({ id:d.id||'json_'+Date.now()+'_'+ok, title:d.title||f.name.replace('.json',''), subject:d.subject||'Other', source:d.source||'', questions:d.questions, dur:d.dur||180, mCor:d.mCor||3, mNeg:d.mNeg||1, savedAt:Date.now() })
+        current.unshift({id:d.id||'json_'+Date.now()+'_'+ok,title:d.title||f.name.replace('.json',''),subject:d.subject||'Other',source:d.source||'',questions:d.questions,dur:d.dur||180,mCor:d.mCor||3,mNeg:d.mNeg||1,savedAt:Date.now()})
         ok++
-      } catch { fail++ }
+      } catch{fail++}
     }
     setSavedTests(current)
-    try { localStorage.setItem(SAVED_KEY,JSON.stringify(current)) } catch(e) {}
+    try{localStorage.setItem(SAVED_KEY,JSON.stringify(current))}catch(e){}
     setUploadMsg(`✅ Loaded ${ok} test(s)${fail?`, ${fail} failed`:''}`)
     setTimeout(()=>setUploadMsg(''),3000)
     setPage('library')
   }
 
-  const q = Qs[cur]
-  const ua = ans[cur]
-  const ak = (q?.ans||'').toUpperCase().trim()
+  const deleteAttempt = (id) => {
+    const updated = attempts.filter(a=>a.id!==id)
+    setAttempts(updated)
+    localStorage.setItem(ATTEMPTS_KEY, JSON.stringify(updated))
+  }
+
+  const q=Qs[cur], ua=ans[cur], ak=(q?.ans||'').toUpperCase().trim()
 
   const getDotState = (i) => {
-    const a = ans[i]; const m = marked[i]; const v = visited[i] || i === 0
-    const hasAns = a && a !== 'skip'
-    if (hasAns && m)  return 'answered-marked'
-    if (hasAns)       return 'answered'
-    if (m)            return 'marked-only'
-    if (v || a === 'skip') return 'skipped'
+    const a=ans[i],m=marked[i],v=visited[i]||i===0,h=a&&a!=='skip'
+    if(h&&m) return 'answered-marked'
+    if(h)    return 'answered'
+    if(m)    return 'marked-only'
+    if(v||a==='skip') return 'skipped'
     return 'untouched'
   }
 
-  const stats = {
-    a:  Qs.filter((_,i) => getDotState(i)==='answered').length,
-    am: Qs.filter((_,i) => getDotState(i)==='answered-marked').length,
-    s:  Qs.filter((_,i) => { const s=getDotState(i); return s==='skipped'||s==='marked-only' }).length,
-    r:  Qs.filter((_,i) => getDotState(i)==='untouched').length
+  const stats={
+    a:  Qs.filter((_,i)=>getDotState(i)==='answered').length,
+    am: Qs.filter((_,i)=>getDotState(i)==='answered-marked').length,
+    s:  Qs.filter((_,i)=>{const s=getDotState(i);return s==='skipped'||s==='marked-only'}).length,
+    r:  Qs.filter((_,i)=>getDotState(i)==='untouched').length
   }
 
-  const optCls = (lbl) => {
-    const sel = ua===lbl
-    if (reviewing) return lbl===ak?'opt cor':sel?'opt wrg':'opt'
-    return sel?'opt sel':'opt'
-  }
+  const optCls=(lbl)=>{const sel=ua===lbl;if(reviewing)return lbl===ak?'opt cor':sel?'opt wrg':'opt';return sel?'opt sel':'opt'}
 
-  const filt = t => {
-    const q2 = search.toLowerCase()
-    return (!q2||t.title.toLowerCase().includes(q2))&&(filter==='all'||t.subject===filter)
-  }
-  const countAll = (tr) => {
-    if (!tr) return 0
-    let n=(tr.tests||[]).filter(filt).length
-    Object.values(tr.folders||{}).forEach(f=>n+=countAll(f))
-    return n
-  }
-  const renderTree = (tr, depth=0, prefix='') => {
-    if (!tr) return null
-    return (
-      <div style={{marginLeft:depth>0?18:0}}>
-        {Object.entries(tr.folders||{}).map(([name,sub]) => {
-          if (!countAll(sub)) return null
-          const key=prefix+name, open=openFolders[key], cnt=countAll(sub)
-          return (
-            <div key={key} style={{marginBottom:8}}>
-              <div className="folder-row" onClick={()=>setOpenFolders(p=>({...p,[key]:!p[key]}))}>
-                <span>{open?'📂':'📁'}</span>
-                <span style={{fontWeight:700,fontSize:'.88rem',flex:1}}>{name}</span>
-                <span className="folder-count">{cnt} test{cnt!==1?'s':''}</span>
-                <span style={{color:'#888',fontSize:'.78rem'}}>{open?'▾':'▸'}</span>
-              </div>
-              {open&&<div style={{marginTop:8,paddingLeft:10,borderLeft:'2px solid #e0e0e0'}}>{renderTree(sub,depth+1,key+'/')}</div>}
-            </div>
-          )
-        })}
-        {(tr.tests||[]).filter(filt).length>0&&(
-          <div className="test-grid" style={{marginTop:depth>0?10:0}}>
-            {(tr.tests||[]).filter(filt).map((t,i)=>(
-              <TestCard key={t.path||t.id} t={t} ci={i} globalLoading={cbtLoading} onCBT={()=>startFromTree(t.path)}/>
-            ))}
+  const filt=t=>{const q2=search.toLowerCase();return(!q2||t.title.toLowerCase().includes(q2))&&(filter==='all'||t.subject===filter)}
+  const countAll=(tr)=>{if(!tr)return 0;let n=(tr.tests||[]).filter(filt).length;Object.values(tr.folders||{}).forEach(f=>n+=countAll(f));return n}
+  const renderTree=(tr,depth=0,prefix='')=>{
+    if(!tr)return null
+    return(<div style={{marginLeft:depth>0?18:0}}>
+      {Object.entries(tr.folders||{}).map(([name,sub])=>{
+        if(!countAll(sub))return null
+        const key=prefix+name,open=openFolders[key],cnt=countAll(sub)
+        return(<div key={key} style={{marginBottom:8}}>
+          <div className="folder-row" onClick={()=>setOpenFolders(p=>({...p,[key]:!p[key]}))}>
+            <span>{open?'📂':'📁'}</span>
+            <span style={{fontWeight:700,fontSize:'.88rem',flex:1}}>{name}</span>
+            <span className="folder-count">{cnt} test{cnt!==1?'s':''}</span>
+            <span style={{color:'#888',fontSize:'.78rem'}}>{open?'▾':'▸'}</span>
           </div>
-        )}
-      </div>
-    )
+          {open&&<div style={{marginTop:8,paddingLeft:10,borderLeft:'2px solid #e0e0e0'}}>{renderTree(sub,depth+1,key+'/')}</div>}
+        </div>)
+      })}
+      {(tr.tests||[]).filter(filt).length>0&&(
+        <div className="test-grid" style={{marginTop:depth>0?10:0}}>
+          {(tr.tests||[]).filter(filt).map((t,i)=>(
+            <TestCard key={t.path||t.id} t={t} ci={i} globalLoading={cbtLoading}
+              onCBT={()=>startFromTree(t.path)}
+              attempt={attempts.find(a=>a.testId===t.id||a.testId===(t.path))}
+              onAnalyse={att=>setAnalyseAttempt(att)}
+              onReattempt={(att)=>{deleteAttempt(att.id);startFromTree(t.path)}}
+            />
+          ))}
+        </div>
+      )}
+    </div>)
   }
 
-  const isBitsatTest = isBITSAT(cfg.subject||'')
-  const subjGroups = {}
-  if (isBitsatTest) {
-    Qs.forEach((q2,i)=>{
-      const s=q2.subject||'Other'
-      if(!subjGroups[s]) subjGroups[s]=[]
-      subjGroups[s].push(i)
-    })
-  }
-  const navSubjects = isBitsatTest ? BITSAT_SUBJECTS.filter(s=>subjGroups[s]?.length>0) : []
+  const isBitsatTest=isBITSAT(cfg.subject||'')
+  const subjGroups={}
+  if(isBitsatTest){Qs.forEach((q2,i)=>{const s=q2.subject||'Other';if(!subjGroups[s])subjGroups[s]=[];subjGroups[s].push(i)})}
+  const navSubjects=isBitsatTest?BITSAT_SUBJECTS.filter(s=>subjGroups[s]?.length>0):[]
 
-  // Bonus logic
-  const bonusQs = Qs.filter(q=>q.isBonus)
-  const mainQs  = Qs.filter(q=>!q.isBonus)
-  const hasBonus = bonusQs.length > 0
-  // All main questions must be answered (not null, not skip counts as attempted)
-  const mainAllAttempted = mainQs.length > 0 && mainQs.every((_,i) => {
-    const globalIdx = Qs.indexOf(mainQs[i]) >= 0 ? Qs.indexOf(mainQs[i]) : i
-    return ans[globalIdx] !== null && ans[globalIdx] !== undefined
-  })
-  // Simpler: count by index
-  const mainIndices  = Qs.map((_,i)=>i).filter(i=>!Qs[i].isBonus)
-  const bonusIndices = Qs.map((_,i)=>i).filter(i=>Qs[i].isBonus)
-  const mainAllDone  = mainIndices.length > 0 && mainIndices.every(i => ans[i] !== null && ans[i] !== undefined)
-  const bonusUnlocked = mainAllDone
-  const inBonus = bonusIndices.includes(cur)
+  // Bonus vars
+  const mainIndices  = Qs.map((_,i)=>i).filter(i=>!Qs[i]?.isBonus)
+  const bonusIndices = Qs.map((_,i)=>i).filter(i=>Qs[i]?.isBonus)
+  const hasBonus     = bonusIndices.length>0
+  const bonusUnlocked= mainIndices.length>0 && mainIndices.every(i=>ans[i]!==null&&ans[i]!==undefined)
+  const inBonus      = bonusIndices.includes(cur)
 
   return (
     <>
@@ -462,11 +439,57 @@ export default function TestZyro() {
         </nav>
       </header>
 
+      {/* ── INLINE ANALYSER MODAL ── */}
+      {analyseAttempt && (
+        <div className="modal-overlay" onClick={e=>{if(e.target.className==='modal-overlay')setAnalyseAttempt(null)}}>
+          <div className="analyse-modal">
+            <div className="am-header">
+              <div>
+                <div className="am-title">📊 {analyseAttempt.testTitle}</div>
+                <div className="am-meta">{fmtDate(analyseAttempt.date)} · Score: <strong style={{color:analyseAttempt.score>=0?'#4ade80':'#f87171'}}>{analyseAttempt.score}/{analyseAttempt.maxScore}</strong> · {analyseAttempt.accuracy}% accuracy</div>
+              </div>
+              <button className="am-close" onClick={()=>setAnalyseAttempt(null)}>✕</button>
+            </div>
+            {/* Stats grid */}
+            <div className="am-stats">
+              {[['✓',analyseAttempt.correct,'Correct','#4ade80'],['✗',analyseAttempt.wrong,'Wrong','#f87171'],['↩',analyseAttempt.skipped,'Skipped','#fbbf24'],['—',analyseAttempt.unattempted,'Not Att.','#888']].map(([ic,n,l,c])=>(
+                <div key={l} className="am-stat"><div className="am-stat-n" style={{color:c}}>{n}</div><div className="am-stat-l">{ic} {l}</div></div>
+              ))}
+            </div>
+            {/* Subject breakdown */}
+            {analyseAttempt.subjStats && (
+              <div className="am-subj">
+                {Object.entries(analyseAttempt.subjStats).map(([s,st])=>{
+                  const sc=getSubjColor(s),tot=st.cor+st.wrg+st.skp+st.un,pct=tot?Math.round(st.cor/tot*100):0
+                  const score=st.cor*(analyseAttempt.marksCorrect||3)-st.wrg*(analyseAttempt.marksWrong||1)
+                  return(<div key={s} className="am-subj-row">
+                    <span className="am-subj-badge" style={{background:sc.light,color:sc.bg}}>{sc.label}</span>
+                    <span className="am-subj-name">{s}</span>
+                    <div className="am-bar-wrap"><div className="am-bar" style={{width:pct+'%',background:sc.bg}}/></div>
+                    <span className="am-pct" style={{color:sc.bg}}>{pct}%</span>
+                    <span className="am-detail" style={{color:'#4ade80'}}>✓{st.cor}</span>
+                    <span className="am-detail" style={{color:'#f87171'}}>✗{st.wrg}</span>
+                    <span className="am-detail" style={{color:'#888'}}>+{score>=0?score:score}</span>
+                  </div>)
+                })}
+              </div>
+            )}
+            <div className="am-footer">
+              <button className="am-dl" onClick={()=>{
+                const blob=new Blob([JSON.stringify(analyseAttempt,null,2)],{type:'application/json'})
+                const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url
+                a.download=`${analyseAttempt.testTitle}_result.json`;a.click();URL.revokeObjectURL(url)
+              }}>📥 Download Output File</button>
+              <button className="am-close-btn" onClick={()=>setAnalyseAttempt(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {page==='library' && (
         <div className="wrap anim">
           {uploadMsg && <div className="flash-msg">{uploadMsg}</div>}
 
-          {/* ── Resume banner ── */}
           {resumeData && (
             <div className="resume-banner">
               <div className="resume-banner-left">
@@ -474,13 +497,7 @@ export default function TestZyro() {
                 <div>
                   <div className="resume-title">Unfinished Test Found</div>
                   <div className="resume-meta">
-                    <strong>{resumeData.cfg?.title}</strong>
-                    &nbsp;·&nbsp;
-                    {resumeData.ans?.filter(a=>a&&a!=='skip').length||0} answered
-                    &nbsp;·&nbsp;
-                    {fmt(Math.max(0,(resumeData.cfg?.dur*60||0)-resumeData.elapsed))} remaining
-                    &nbsp;·&nbsp;
-                    Saved {Math.round((Date.now()-resumeData.savedAt)/60000)} min ago
+                    <strong>{resumeData.cfg?.title}</strong> · {resumeData.ans?.filter(a=>a&&a!=='skip').length||0} answered · {fmt(Math.max(0,(resumeData.cfg?.dur*60||0)-resumeData.elapsed))} remaining · Saved {Math.round((Date.now()-resumeData.savedAt)/60000)} min ago
                   </div>
                 </div>
               </div>
@@ -496,29 +513,30 @@ export default function TestZyro() {
             <button className="btn-sm" onClick={loadTree}>🔄 Refresh</button>
           </div>
 
-          {/* What's New */}
-          {WHATS_NEW.length > 0 && (
+          {WHATS_NEW.length>0&&(
             <div className="whats-new">
               <div className="wn-title">🆕 What's New</div>
               <div className="wn-list">
-                {WHATS_NEW.map((item, i) => (
-                  <div key={i} className="wn-item">
-                    <span className="wn-date">{item.date}</span>
-                    <span className="wn-text">{item.text}</span>
-                  </div>
+                {WHATS_NEW.map((item,i)=>(
+                  <div key={i} className="wn-item"><span className="wn-date">{item.date}</span><span className="wn-text">{item.text}</span></div>
                 ))}
               </div>
             </div>
           )}
-          <div className="toolbar">
-            <input className="search-inp" placeholder="🔍 Search tests…" value={search} onChange={e=>setSearch(e.target.value)}/>
-            <div className="fbtns">{['all','BITSAT'].map(f=><button key={f} className={`fbtn${filter===f?' on':''}`} onClick={()=>setFilter(f)}>{f.toUpperCase()}</button>)}</div>
-          </div>
+
           <SecTitle>📁 Available Tests</SecTitle>
-          {treeLoad ? <div className="loading-txt">Loading…</div> : renderTree(tree)}
+          {treeLoad?<div className="loading-txt">Loading…</div>:renderTree(tree)}
           {savedTests.filter(filt).length>0&&<>
             <SecTitle style={{marginTop:32}}>💾 Saved Tests</SecTitle>
-            <div className="test-grid">{savedTests.filter(filt).map((t,i)=><TestCard key={t.id} t={t} ci={i} globalLoading={cbtLoading} onCBT={()=>startFromSaved(t)} onDel={()=>{if(confirm('Delete?')){const l=savedTests.filter(x=>x.id!==t.id);setSavedTests(l);try{localStorage.setItem(SAVED_KEY,JSON.stringify(l))}catch(e){}}}}/>)}</div>
+            <div className="test-grid">{savedTests.filter(filt).map((t,i)=>(
+              <TestCard key={t.id} t={t} ci={i} globalLoading={cbtLoading}
+                onCBT={()=>startFromSaved(t)}
+                attempt={attempts.find(a=>a.testId===t.id)}
+                onAnalyse={att=>setAnalyseAttempt(att)}
+                onReattempt={(att)=>{deleteAttempt(att.id);startFromSaved(t)}}
+                onDel={()=>{if(confirm('Delete?')){const l=savedTests.filter(x=>x.id!==t.id);setSavedTests(l);try{localStorage.setItem(SAVED_KEY,JSON.stringify(l))}catch(e){}}}}
+              />
+            ))}</div>
           </>}
         </div>
       )}
@@ -533,24 +551,6 @@ export default function TestZyro() {
             <label htmlFor="json-inp" className="btn-primary" style={{cursor:'pointer',display:'inline-block',padding:'9px 24px'}}>Choose JSON File(s)</label>
             <input id="json-inp" type="file" accept=".json" multiple style={{display:'none'}} onChange={e=>e.target.files.length&&onJsonFiles(Array.from(e.target.files))}/>
           </DropZone>
-          <div className="info-card" style={{marginTop:18}}>
-            <div className="info-card-title">📄 JSON Format (BITSAT)</div>
-            <pre className="code-block">{`{
-  "title": "BITSAT Mock Test 3",
-  "subject": "BITSAT",
-  "dur": 180, "mCor": 3, "mNeg": 1,
-  "questions": [
-    { "subject": "Physics", "type": "MCQ",
-      "text": "Question text here...",
-      "opts": ["Option A","Option B","Option C","Option D"],
-      "ans": "B" },
-    { "subject": "Maths", "type": "MCQ",
-      "text": "Question text here...",
-      "opts": ["Option A","Option B","Option C","Option D"],
-      "ans": "C" }
-  ]
-}`}</pre>
-          </div>
         </div>
       )}
 
@@ -564,51 +564,31 @@ export default function TestZyro() {
             <div className="cbt-top-right">
               <div className={`cbt-timer${secs<=300?' warn':''}`}>⏱ Time Left: <strong>{fmt(secs)}</strong></div>
               <button className="cbt-submit-btn" onClick={()=>doSubmit()}>Submit Test</button>
-              <button className="cbt-exit-btn" title="Progress auto-saved — resume anytime" onClick={exitCBT}>⏸ Save & Exit</button>
+              <button className="cbt-exit-btn" onClick={exitCBT}>⏸ Save & Exit</button>
             </div>
           </div>
 
-          {isBitsatTest && navSubjects.length>0 && (
+          {isBitsatTest&&navSubjects.length>0&&(
             <div className="subj-tabs">
-              {navSubjects.map(s => {
-                const sc = getSubjColor(s)
-                const indices = subjGroups[s]||[]
-                const answered = indices.filter(i=>ans[i]&&ans[i]!=='skip').length
-                const isActive = activeNavSubj===s && !inBonus
-                return (
-                  <button key={s} className={`subj-tab${isActive?' active':''}`}
-                    style={isActive?{background:sc.bg,color:'#fff',borderColor:sc.bg}:{}}
-                    onClick={()=>{
-                      setActiveNavSubj(s)
-                      const firstIdx = subjGroups[s]?.[0]
-                      if (firstIdx !== undefined) goTo(firstIdx)
-                    }}>
-                    <span className="subj-tab-label">{sc.label}</span>
-                    <span className="subj-tab-name">{s}</span>
-                    <span className="subj-tab-count">{answered}/{indices.length}</span>
-                  </button>
-                )
+              {navSubjects.map(s=>{
+                const sc=getSubjColor(s),indices=subjGroups[s]||[],answered=indices.filter(i=>ans[i]&&ans[i]!=='skip').length,isActive=activeNavSubj===s&&!inBonus
+                return(<button key={s} className={`subj-tab${isActive?' active':''}`}
+                  style={isActive?{background:sc.bg,color:'#fff',borderColor:sc.bg}:{}}
+                  onClick={()=>{setActiveNavSubj(s);const fi=subjGroups[s]?.[0];if(fi!==undefined)goTo(fi)}}>
+                  <span className="subj-tab-label">{sc.label}</span>
+                  <span className="subj-tab-name">{s}</span>
+                  <span className="subj-tab-count">{answered}/{indices.length}</span>
+                </button>)
               })}
-              {/* Bonus tab */}
-              {hasBonus && (
-                <button
-                  className={`subj-tab bonus-tab${inBonus?' active':''} ${bonusUnlocked?'unlocked':'locked'}`}
+              {hasBonus&&(
+                <button className={`subj-tab bonus-tab${inBonus?' active':''} ${bonusUnlocked?'unlocked':'locked'}`}
                   onClick={()=>{
-                    if (!bonusUnlocked) {
-                      const remaining = mainIndices.filter(i=>ans[i]===null||ans[i]===undefined).length
-                      alert(`⚠️ Attempt all ${mainIndices.length} main questions first!\n${remaining} question${remaining!==1?'s':''} still unanswered.`)
-                      return
-                    }
-                    const firstBonus = bonusIndices[0]
-                    if (firstBonus !== undefined) { setActiveNavSubj('Bonus'); goTo(firstBonus) }
+                    if(!bonusUnlocked){const rem=mainIndices.filter(i=>ans[i]===null||ans[i]===undefined).length;alert(`⚠️ Attempt all ${mainIndices.length} main questions first!\n${rem} still unanswered.`);return}
+                    setActiveNavSubj('Bonus');if(bonusIndices[0]!==undefined)goTo(bonusIndices[0])
                   }}>
                   <span className="subj-tab-label">{bonusUnlocked?'🎁':'🔒'}</span>
                   <span className="subj-tab-name">Bonus</span>
-                  <span className="subj-tab-count">
-                    {bonusUnlocked
-                      ? `${bonusIndices.filter(i=>ans[i]&&ans[i]!=='skip').length}/${bonusIndices.length}`
-                      : `${mainIndices.filter(i=>ans[i]===null||ans[i]===undefined).length} left`}
-                  </span>
+                  <span className="subj-tab-count">{bonusUnlocked?`${bonusIndices.filter(i=>ans[i]&&ans[i]!=='skip').length}/${bonusIndices.length}`:`${mainIndices.filter(i=>ans[i]===null||ans[i]===undefined).length} left`}</span>
                 </button>
               )}
             </div>
@@ -616,13 +596,9 @@ export default function TestZyro() {
 
           <div className="cbt-body">
             <div className="qpanel">
-              {q?.subject && (
-                <div className="section-banner" style={{
-                  background: q.isBonus ? '#fff8e1' : getSubjColor(q.subject).light,
-                  borderColor: q.isBonus ? '#ff9800' : getSubjColor(q.subject).dot,
-                  color: q.isBonus ? '#e65100' : getSubjColor(q.subject).bg
-                }}>
-                  Section: <strong>{q.isBonus ? '🎁 Bonus' : q.subject}</strong>
+              {q?.subject&&(
+                <div className="section-banner" style={{background:q.isBonus?'#fff8e1':getSubjColor(q.subject).light,borderColor:q.isBonus?'#ff9800':getSubjColor(q.subject).dot,color:q.isBonus?'#e65100':getSubjColor(q.subject).bg}}>
+                  Section: <strong>{q.isBonus?'🎁 Bonus':q.subject}</strong>
                   {q.type==='INTEGER'&&<span className="type-badge int">Integer Type</span>}
                   {q.type==='MCQ'&&<span className="type-badge mcq">Single Correct</span>}
                 </div>
@@ -631,15 +607,13 @@ export default function TestZyro() {
                 <span className="qnum-label">Question {cur+1} of {Qs.length}</span>
                 <span className="marks-info">+{q?.mCor||cfg.mCor||3} / −{q?.mNeg||cfg.mNeg||1}</span>
               </div>
-
-              {q?.images && q.images.length>0 ? (
-                <div className="q-images">{q.images.map((img,i)=><img key={i} src={`data:image/png;base64,${img}`} alt={`Q${cur+1}`} style={{maxWidth:'100%',display:'block',margin:'0 auto 8px'}}/>)}</div>
-              ) : q?.pageRef!=null && cfg.pageImages?.[String(q.pageRef)] ? (
-                <div className="q-images"><img src={`data:image/jpeg;base64,${cfg.pageImages[String(q.pageRef)]}`} alt={`Q${cur+1}`} style={{maxWidth:'100%',display:'block',margin:'0 auto'}}/></div>
-              ) : (
+              {q?.images&&q.images.length>0?(
+                <div className="q-images">{q.images.map((img,i)=><img key={i} src={`data:image/png;base64,${img}`} alt="" style={{maxWidth:'100%',display:'block',margin:'0 auto 8px'}}/>)}</div>
+              ):q?.pageRef!=null&&cfg.pageImages?.[String(q.pageRef)]?(
+                <div className="q-images"><img src={`data:image/jpeg;base64,${cfg.pageImages[String(q.pageRef)]}`} alt="" style={{maxWidth:'100%',display:'block',margin:'0 auto'}}/></div>
+              ):(
                 <div className="qtext" dangerouslySetInnerHTML={{__html:(q?.text||'').replace(/\n/g,'<br/>')}}/>
               )}
-
               {q?.type==='MCQ'
                 ?<div className="opts">{['A','B','C','D'].map((lbl,i)=>(
                   <div key={lbl} className={optCls(lbl)} onClick={()=>{if(!done&&!reviewing)setAnswer(lbl)}}>
@@ -656,9 +630,7 @@ export default function TestZyro() {
                     placeholder="Type answer…"/>
                 </div>
               }
-
-              {reviewing && <div className="ans-banner">✓ Correct Answer: <strong>{q?.ans||'?'}</strong></div>}
-
+              {reviewing&&<div className="ans-banner">✓ Correct Answer: <strong>{q?.ans||'?'}</strong></div>}
               {!done&&!reviewing&&(
                 <div className="action-row">
                   <button className="btn-save-next" onClick={saveAndNext}>Save &amp; Next</button>
@@ -669,10 +641,9 @@ export default function TestZyro() {
               <div className="nav-row">
                 <button className="btn-prev" onClick={()=>goTo(Math.max(0,cur-1))}>← Previous</button>
                 <button className="btn-next" onClick={()=>{
-                  let next = cur + 1
-                  // Skip into bonus only if unlocked
-                  if (next < Qs.length && Qs[next]?.isBonus && !bonusUnlocked) return
-                  if (next < Qs.length) goTo(next)
+                  let next=cur+1
+                  if(next<Qs.length&&Qs[next]?.isBonus&&!bonusUnlocked)return
+                  if(next<Qs.length)goTo(next)
                 }}>Next →</button>
               </div>
             </div>
@@ -691,96 +662,56 @@ export default function TestZyro() {
                 <div className="sb-stat"><span className="sb-stat-n red">{stats.s}</span><span className="sb-stat-l">Marked</span></div>
                 <div className="sb-stat"><span className="sb-stat-n gray">{stats.r}</span><span className="sb-stat-l">Remaining</span></div>
               </div>
-
-              {isBitsatTest ? (
+              {isBitsatTest?(
                 <div className="sb-sections">
-                  {navSubjects.map(s => {
-                    const sc=getSubjColor(s)
-                    const indices=subjGroups[s]||[]
-                    const isActiveSection=activeNavSubj===s && !inBonus
-                    return (
-                      <div key={s} className={`sb-section${isActiveSection?' active':''}`}>
-                        <div className="sb-section-hdr"
-                          style={{background:sc.light,color:sc.bg,borderLeft:`4px solid ${sc.dot}`}}
-                          onClick={()=>{
-                            setActiveNavSubj(s)
-                            const firstIdx = subjGroups[s]?.[0]
-                            if (firstIdx !== undefined) goTo(firstIdx)
-                          }}>
-                          <span className="sb-section-label">{sc.label}</span>
-                          <span className="sb-section-name">{s}</span>
-                          <span className="sb-section-count">{indices.filter(i=>ans[i]&&ans[i]!=='skip').length}/{indices.length}</span>
-                        </div>
-                        {isActiveSection && (
-                          <div className="qgrid">
-                            {indices.map(i=>{
-                              const state = getDotState(i)
-                              const isCur = i===cur
-                              const cls = `qdot${isCur?' current':' '+state}`
-                              return (
-                                <div key={i} className={cls} onClick={()=>{goTo(i);setActiveNavSubj(s)}} style={{position:'relative'}}>
-                                  {i+1}
-                                  {state==='answered-marked' && <span className="dot-arrow">▸</span>}
-                                </div>
-                              )
-                            })}
-                          </div>
-                        )}
+                  {navSubjects.map(s=>{
+                    const sc=getSubjColor(s),indices=subjGroups[s]||[],isAct=activeNavSubj===s&&!inBonus
+                    return(<div key={s} className={`sb-section${isAct?' active':''}`}>
+                      <div className="sb-section-hdr" style={{background:sc.light,color:sc.bg,borderLeft:`4px solid ${sc.dot}`}}
+                        onClick={()=>{setActiveNavSubj(s);const fi=subjGroups[s]?.[0];if(fi!==undefined)goTo(fi)}}>
+                        <span className="sb-section-label">{sc.label}</span>
+                        <span className="sb-section-name">{s}</span>
+                        <span className="sb-section-count">{indices.filter(i=>ans[i]&&ans[i]!=='skip').length}/{indices.length}</span>
                       </div>
-                    )
+                      {isAct&&(
+                        <div className="qgrid">
+                          {indices.map(i=>{const state=getDotState(i),isCur=i===cur;return(
+                            <div key={i} className={`qdot${isCur?' current':' '+state}`} onClick={()=>{goTo(i);setActiveNavSubj(s)}} style={{position:'relative'}}>
+                              {i+1}{state==='answered-marked'&&<span className="dot-arrow">▸</span>}
+                            </div>
+                          )})}
+                        </div>
+                      )}
+                    </div>)
                   })}
-                  {/* Bonus section in sidebar */}
-                  {hasBonus && (
+                  {hasBonus&&(
                     <div className={`sb-section${inBonus?' active':''}`}>
                       <div className="sb-section-hdr"
                         style={{background:bonusUnlocked?'#fff8e1':'#f5f5f5',color:bonusUnlocked?'#e65100':'#aaa',borderLeft:`4px solid ${bonusUnlocked?'#ff9800':'#ccc'}`}}
-                        onClick={()=>{
-                          if(!bonusUnlocked){
-                            const rem=mainIndices.filter(i=>ans[i]===null||ans[i]===undefined).length
-                            alert(`⚠️ Attempt all ${mainIndices.length} main questions first!\n${rem} still unanswered.`)
-                            return
-                          }
-                          setActiveNavSubj('Bonus')
-                          if(bonusIndices[0]!==undefined) goTo(bonusIndices[0])
-                        }}>
+                        onClick={()=>{if(!bonusUnlocked){alert(`⚠️ Attempt all main questions first!`);return}setActiveNavSubj('Bonus');if(bonusIndices[0]!==undefined)goTo(bonusIndices[0])}}>
                         <span className="sb-section-label">{bonusUnlocked?'🎁':'🔒'}</span>
                         <span className="sb-section-name">Bonus</span>
-                        <span className="sb-section-count">
-                          {bonusUnlocked
-                            ? `${bonusIndices.filter(i=>ans[i]&&ans[i]!=='skip').length}/${bonusIndices.length}`
-                            : 'Locked'}
-                        </span>
+                        <span className="sb-section-count">{bonusUnlocked?`${bonusIndices.filter(i=>ans[i]&&ans[i]!=='skip').length}/${bonusIndices.length}`:'Locked'}</span>
                       </div>
-                      {inBonus && bonusUnlocked && (
+                      {inBonus&&bonusUnlocked&&(
                         <div className="qgrid">
-                          {bonusIndices.map(i=>{
-                            const state=getDotState(i), isCur=i===cur
-                            return (
-                              <div key={i} className={`qdot${isCur?' current':' '+state}`}
-                                onClick={()=>{goTo(i);setActiveNavSubj('Bonus')}} style={{position:'relative'}}>
-                                {i+1}
-                                {state==='answered-marked'&&<span className="dot-arrow">▸</span>}
-                              </div>
-                            )
-                          })}
+                          {bonusIndices.map(i=>{const state=getDotState(i),isCur=i===cur;return(
+                            <div key={i} className={`qdot${isCur?' current':' '+state}`} onClick={()=>{goTo(i);setActiveNavSubj('Bonus')}} style={{position:'relative'}}>
+                              {i+1}{state==='answered-marked'&&<span className="dot-arrow">▸</span>}
+                            </div>
+                          )})}
                         </div>
                       )}
                     </div>
                   )}
                 </div>
-              ) : (
+              ):(
                 <div className="qgrid" style={{padding:'8px'}}>
-                  {Qs.map((_,i)=>{
-                    const state = getDotState(i)
-                    const isCur = i===cur
-                    const cls = `qdot${isCur?' current':' '+state}`
-                    return (
-                      <div key={i} className={cls} onClick={()=>goTo(i)} style={{position:'relative'}}>
-                        {i+1}
-                        {state==='answered-marked' && <span className="dot-arrow">▸</span>}
-                      </div>
-                    )
-                  })}
+                  {Qs.map((_,i)=>{const state=getDotState(i),isCur=i===cur;return(
+                    <div key={i} className={`qdot${isCur?' current':' '+state}`} onClick={()=>goTo(i)} style={{position:'relative'}}>
+                      {i+1}{state==='answered-marked'&&<span className="dot-arrow">▸</span>}
+                    </div>
+                  )})}
                 </div>
               )}
               <div className="sb-submit-area">
@@ -802,44 +733,32 @@ export default function TestZyro() {
               <div className="res-max">out of {result.max} (+{cfg.mCor}/−{cfg.mNeg})</div>
               <div className="res-pct" style={{color:result.pct>=60?'#4ade80':'#fbbf24'}}>{result.pct}% accuracy</div>
             </div>
-
-            {result.subjStats && Object.keys(result.subjStats).length>1 && (
+            {result.subjStats&&Object.keys(result.subjStats).length>1&&(
               <div className="res-subj-breakdown">
                 <div className="res-subj-title">Subject-wise Performance</div>
                 {Object.entries(result.subjStats).map(([s,st])=>{
-                  const sc=getSubjColor(s)
-                  const total=st.cor+st.wrg+st.skp+st.un
-                  const pct=total?Math.round(st.cor/total*100):0
-                  return (
-                    <div key={s} className="res-subj-row">
-                      <span className="res-subj-badge" style={{background:sc.light,color:sc.bg}}>{sc.label}</span>
-                      <span className="res-subj-name">{s}</span>
-                      <span style={{color:'#4ade80',fontWeight:700,fontSize:'.8rem'}}>✓{st.cor}</span>
-                      <span style={{color:'#f87171',fontWeight:700,fontSize:'.8rem'}}>✗{st.wrg}</span>
-                      <span style={{fontWeight:700,fontSize:'.8rem',color:pct>=60?'#4ade80':'#fbbf24'}}>{pct}%</span>
-                    </div>
-                  )
+                  const sc=getSubjColor(s),total=st.cor+st.wrg+st.skp+st.un,pct=total?Math.round(st.cor/total*100):0
+                  return(<div key={s} className="res-subj-row">
+                    <span className="res-subj-badge" style={{background:sc.light,color:sc.bg}}>{sc.label}</span>
+                    <span className="res-subj-name">{s}</span>
+                    <span style={{color:'#4ade80',fontWeight:700,fontSize:'.8rem'}}>✓{st.cor}</span>
+                    <span style={{color:'#f87171',fontWeight:700,fontSize:'.8rem'}}>✗{st.wrg}</span>
+                    <span style={{fontWeight:700,fontSize:'.8rem',color:pct>=60?'#4ade80':'#fbbf24'}}>{pct}%</span>
+                  </div>)
                 })}
               </div>
             )}
-
             <div className="res-grid">
               {[['✓',result.cor,'Correct','#4ade80'],['✗',result.wrg,'Wrong','#f87171'],['↩',result.skp,'Marked','#fbbf24'],['—',result.un,'Not Attempted','#888']].map(([ic,n,l,c])=>(
-                <div key={l} className="res-cell">
-                  <div className="res-cell-n" style={{color:c}}>{n}</div>
-                  <div className="res-cell-l">{ic} {l}</div>
-                </div>
+                <div key={l} className="res-cell"><div className="res-cell-n" style={{color:c}}>{n}</div><div className="res-cell-l">{ic} {l}</div></div>
               ))}
             </div>
-
             <div className="res-actions">
-              <button className="btn-download" onClick={()=>downloadOutputFile(result)}>📥 Download Output File</button>
+              <button className="btn-download" onClick={()=>downloadOutputFile(result)}>📥 Download Output</button>
               <button className="btn-review" onClick={()=>{setReviewing(true);setResult(null);setCur(0)}}>📖 Review Answers</button>
               <button className="btn-back-lib" onClick={()=>{setResult(null);setCbtOn(false);setCbtLoading(false);setPage('library')}}>📚 Library</button>
             </div>
-            <div className="res-download-note">
-              💡 Download the output file to analyse on the <strong>Test Analyser</strong> page
-            </div>
+            <div className="res-download-note">💡 Your attempt is auto-saved — click Analyse on the test card anytime</div>
           </div>
         </div>
       )}
@@ -851,7 +770,7 @@ function SecTitle({children,style}) {
   return <div style={{fontSize:'.7rem',fontFamily:'Roboto Mono,monospace',color:'#888',letterSpacing:2,textTransform:'uppercase',marginBottom:12,display:'flex',alignItems:'center',gap:10,...style}}>{children}<div style={{flex:1,height:1,background:'#e0e0e0'}}/></div>
 }
 
-function TestCard({t, ci, onCBT, onDel, globalLoading}) {
+function TestCard({t, ci, onCBT, onDel, globalLoading, attempt, onAnalyse, onReattempt}) {
   const PALETTE=['#1a237e','#1b5e20','#b71c1c','#4a148c','#e65100','#006064','#37474f']
   const accent = t.accentColor||PALETTE[ci%PALETTE.length]
   const subj = t.subject||'BITSAT'
@@ -876,16 +795,30 @@ function TestCard({t, ci, onCBT, onDel, globalLoading}) {
             {t.hasBonus&&<span className="tc-section-dot" style={{background:'#fff8e1',color:'#e65100',border:'1px solid #ffcc80'}}>🎁 BON</span>}
           </div>
         )}
-        {globalLoading && <div className="tc-loading-notice">⏳ Loading test… please wait</div>}
-        <div className="tc-actions">
-          <button className="tc-cbt-btn"
-            style={{background: globalLoading ? '#9e9e9e' : accent, cursor: globalLoading ? 'not-allowed' : 'pointer'}}
-            onClick={globalLoading ? undefined : onCBT}
-            disabled={globalLoading}>
-            {globalLoading ? '⏳ Loading…' : '🎯 Start CBT'}
-          </button>
-          {onDel&&!globalLoading&&<button className="tc-del-btn" onClick={onDel}>✕</button>}
-        </div>
+        {/* Past attempt row */}
+        {attempt && (
+          <div className="tc-attempt">
+            <div className="tc-att-info">
+              <span className="tc-att-score" style={{color:attempt.score>=0?'#2e7d32':'#c62828'}}>Score: {attempt.score}/{attempt.maxScore}</span>
+              <span className="tc-att-acc">({attempt.accuracy}%)</span>
+              <span className="tc-att-date">{new Date(attempt.date).toLocaleDateString('en-IN',{day:'numeric',month:'short'})}</span>
+            </div>
+            <div className="tc-att-btns">
+              <button className="tc-analyse-btn" onClick={()=>onAnalyse(attempt)}>📊 Analyse</button>
+              <button className="tc-reattempt-btn" style={{background:accent}} onClick={()=>onReattempt(attempt)}>↺ Reattempt</button>
+            </div>
+          </div>
+        )}
+        {globalLoading&&<div className="tc-loading-notice">⏳ Loading test… please wait</div>}
+        {!attempt && (
+          <div className="tc-actions">
+            <button className="tc-cbt-btn" style={{background:globalLoading?'#9e9e9e':accent,cursor:globalLoading?'not-allowed':'pointer'}}
+              onClick={globalLoading?undefined:onCBT} disabled={globalLoading}>
+              {globalLoading?'⏳ Loading…':'🎯 Start CBT'}
+            </button>
+            {onDel&&!globalLoading&&<button className="tc-del-btn" onClick={onDel}>✕</button>}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -1091,4 +1024,51 @@ body{background:#f5f5f5;color:#212121;font-family:'Roboto',sans-serif;min-height
   .qgrid{grid-template-columns:repeat(8,1fr)}
   .hdr{padding:0 12px}
 }
+/* Past attempt on card */
+.tc-attempt{background:#f5f7ff;border:1px solid #e0e4ff;border-radius:6px;padding:9px 11px;margin-bottom:10px}
+.tc-att-info{display:flex;align-items:center;gap:8px;margin-bottom:7px;flex-wrap:wrap}
+.tc-att-score{font-weight:700;font-size:.8rem;font-family:'Roboto Mono',monospace}
+.tc-att-acc{font-size:.75rem;color:#666}
+.tc-att-date{font-size:.68rem;color:#aaa;font-family:'Roboto Mono',monospace;margin-left:auto}
+.tc-att-btns{display:flex;gap:6px}
+.tc-analyse-btn{flex:1;padding:7px 10px;border-radius:5px;font-family:'Roboto',sans-serif;font-weight:600;font-size:.75rem;cursor:pointer;border:1.5px solid #1a237e;background:white;color:#1a237e}
+.tc-analyse-btn:hover{background:#e8eaf6}
+.tc-reattempt-btn{flex:1;padding:7px 10px;border-radius:5px;font-family:'Roboto',sans-serif;font-weight:700;font-size:.75rem;cursor:pointer;border:none;color:white}
+.tc-reattempt-btn:hover{opacity:.88}
+.tc-loading-notice{font-size:.72rem;color:#e65100;background:#fff8e1;border:1px solid #ffcc80;border-radius:5px;padding:5px 10px;margin-bottom:8px;font-weight:600}
+.tc-dimmed{opacity:.6;pointer-events:none}
+/* Inline analyser modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:2000;display:flex;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(3px)}
+.analyse-modal{background:#1a1a2e;color:white;border-radius:14px;width:100%;max-width:560px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.5);max-height:90vh;overflow-y:auto;animation:up .25s ease}
+.am-header{background:linear-gradient(135deg,#1a237e,#283593);padding:18px 20px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.am-title{font-weight:700;font-size:.95rem;margin-bottom:4px}
+.am-meta{font-size:.74rem;color:rgba(255,255,255,.8)}
+.am-close{background:rgba(255,255,255,.1);border:none;color:white;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:.8rem;flex-shrink:0}
+.am-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:rgba(255,255,255,.1)}
+.am-stat{background:#1f2944;padding:14px 8px;text-align:center}
+.am-stat-n{font-family:'Roboto Mono',monospace;font-size:1.4rem;font-weight:700;margin-bottom:3px}
+.am-stat-l{font-size:.6rem;color:#aaa;text-transform:uppercase}
+.am-subj{padding:14px 18px;display:flex;flex-direction:column;gap:8px;border-top:1px solid rgba(255,255,255,.1)}
+.am-subj-row{display:grid;grid-template-columns:36px 1fr 80px 32px 28px 28px 36px;align-items:center;gap:6px;font-size:.8rem}
+.am-subj-badge{font-size:.6rem;font-weight:700;font-family:'Roboto Mono',monospace;padding:2px 6px;border-radius:4px;text-align:center}
+.am-subj-name{font-size:.78rem;color:#ddd}
+.am-bar-wrap{height:4px;background:rgba(255,255,255,.1);border-radius:99px;overflow:hidden}
+.am-bar{height:100%;border-radius:99px}
+.am-pct{font-family:'Roboto Mono',monospace;font-size:.7rem;font-weight:700;text-align:right}
+.am-detail{font-family:'Roboto Mono',monospace;font-size:.68rem;font-weight:700;text-align:center}
+.am-footer{padding:14px 18px;display:flex;gap:8px;border-top:1px solid rgba(255,255,255,.1);flex-wrap:wrap}
+.am-dl{background:#e65100;color:white;border:none;padding:9px 16px;border-radius:6px;font-family:'Roboto',sans-serif;font-weight:700;font-size:.8rem;cursor:pointer}
+.am-dl:hover{background:#bf360c}
+.am-close-btn{background:rgba(255,255,255,.1);color:white;border:1px solid rgba(255,255,255,.2);padding:9px 16px;border-radius:6px;font-family:'Roboto',sans-serif;font-size:.8rem;cursor:pointer}
+/* Whats new */
+.whats-new{background:white;border:1px solid #e8eaf6;border-left:4px solid #1a237e;border-radius:8px;padding:12px 16px;margin-bottom:18px}
+.wn-title{font-size:.72rem;font-weight:800;color:#1a237e;text-transform:uppercase;letter-spacing:1px;font-family:'Roboto Mono',monospace;margin-bottom:8px}
+.wn-list{display:flex;flex-direction:column;gap:5px}
+.wn-item{display:flex;align-items:baseline;gap:10px;font-size:.8rem}
+.wn-date{font-family:'Roboto Mono',monospace;font-size:.65rem;color:#aaa;flex-shrink:0;min-width:80px}
+.wn-text{color:#333}
+/* Bonus tab */
+.bonus-tab.locked{color:#aaa;border-right:1px solid #ccc;background:#f9f9f9}
+.bonus-tab.unlocked{color:#e65100;background:#fff8e1}
+.bonus-tab.unlocked.active{background:#e65100!important;color:white!important;border-color:#e65100!important}
 `
