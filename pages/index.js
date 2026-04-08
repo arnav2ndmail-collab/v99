@@ -9,9 +9,7 @@ const RESUME_KEY = 'tz_resume_v1'
 // ── EDIT THIS to update the "What's New" panel on the library page ─────────
 const WHATS_NEW = [
   { date: '08 Apr 2025', text: '🎁 Bonus questions added — unlocks after all main Qs attempted' },
-  { date: '08 Apr 2025', text: '⏸ Resume feature — close tab anytime, continue where you left off' },
   { date: '07 Apr 2025', text: '📄 Solutions page — download answer key PDFs by series' },
-  { date: '06 Apr 2025', text: '🔢 Test sorting fixed — tests now appear in correct order (1,2,3…10)' },
 ]
 // ──────────────────────────────────────────────────────────────────────────  // auto-saved in-progress test
 
