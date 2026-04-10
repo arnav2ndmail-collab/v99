@@ -11,6 +11,7 @@ const ATTEMPTS_KEY = 'tz_attempts_v1'
 // ── EDIT THIS to update the "What's New" panel ────────────────────────────
 const WHATS_NEW = [
   { date: '08 Apr 2025', text: '🎁 Bonus questions — unlocks after all main Qs answered' },
+  { date: '08 Apr 2025', text: '⏸ Resume — close tab anytime, continue where you left off' },
   { date: '08 Apr 2025', text: '📊 Past Tests — analyse previous attempts directly' },
   { date: '07 Apr 2025', text: '📄 Solutions page — download answer key PDFs' },
 ]
@@ -27,9 +28,32 @@ function getSubjColor(subj) {
   return SUBJECT_COLORS[subj] || { bg:'#37474f', light:'#eceff1', dot:'#546e7a', label:'Q' }
 }
 
-// Strip images from Qs before saving to localStorage (avoid quota errors)
-function stripImages(qs) {
-  return qs.map(q => { const {images, ...rest} = q; return rest })
+// ── LEAN STORAGE: only save answers/progress, re-fetch test for images ───
+// Resume: {testPath, ans, marked, visited, cur, elapsed, savedAt, cfg(no images)}
+function saveResume(data) {
+  try { localStorage.setItem(RESUME_KEY, JSON.stringify(data)) } catch(e) {}
+}
+function loadResume() {
+  try {
+    const s = localStorage.getItem(RESUME_KEY)
+    if (!s) return null
+    const d = JSON.parse(s)
+    if (d?.cfg && d?.savedAt && Date.now()-d.savedAt < 6*60*60*1000) return d
+    localStorage.removeItem(RESUME_KEY)
+  } catch(e) { localStorage.removeItem(RESUME_KEY) }
+  return null
+}
+function clearResume() {
+  try { localStorage.removeItem(RESUME_KEY) } catch(e) {}
+}
+// Attempt: scores + answers only (no images) + testPath to re-fetch
+function saveAttempt(attempt) {
+  try {
+    const prev = JSON.parse(localStorage.getItem(ATTEMPTS_KEY)||'[]')
+    const updated = [attempt, ...prev.filter(a=>a.testId!==attempt.testId)].slice(0,30)
+    localStorage.setItem(ATTEMPTS_KEY, JSON.stringify(updated))
+    return updated
+  } catch(e) { return [] }
 }
 
 export default function TestZyro() {
@@ -56,7 +80,6 @@ export default function TestZyro() {
   const [resumeData, setResumeData] = useState(null)
   const [cbtLoading, setCbtLoading] = useState(false)
   const [attempts, setAttempts]     = useState([]) // past test attempts
-  const [analyseAttempt, setAnalyseAttempt] = useState(null) // attempt being analysed
 
   const timerRef  = useRef(null)
   const startRef  = useRef(null)
@@ -73,14 +96,10 @@ export default function TestZyro() {
     setAttempts(JSON.parse(localStorage.getItem(ATTEMPTS_KEY)||'[]'))
     // Load resume
     try {
-      const saved = localStorage.getItem(RESUME_KEY)
-      if (saved) {
-        const rd = JSON.parse(saved)
-        if (rd?.cfg && rd?.savedAt && Date.now()-rd.savedAt < 6*60*60*1000) {
-          setResumeData(rd)
-        } else { localStorage.removeItem(RESUME_KEY) }
-      }
-    } catch(e) { localStorage.removeItem(RESUME_KEY) }
+      const rd = loadResume()
+      if (rd) setResumeData(rd)
+      else clearResume()
+    } catch(e) { clearResume() }
     loadTree()
   }, [])
 
@@ -130,15 +149,13 @@ export default function TestZyro() {
     setCbtLoading(false)
     startRef.current = Date.now()
     clearInterval(timerRef.current)
-    // Save immediately (images stripped to avoid localStorage quota)
-    try {
-      localStorage.setItem(RESUME_KEY, JSON.stringify({
-        cfg: c, Qs: stripImages(qs), ans: blankAns,
-        marked: new Array(qs.length).fill(false),
-        visited: new Array(qs.length).fill(false),
-        cur: 0, elapsed: 0, savedAt: Date.now()
-      }))
-    } catch(e) {}
+    // Save tiny resume - no Qs/images, just path + blank answers
+    saveResume({
+      testPath: c.id, cfg: c,
+      ans: blankAns, marked: new Array(qs.length).fill(false),
+      visited: new Array(qs.length).fill(false),
+      cur: 0, elapsed: 0, savedAt: Date.now()
+    })
   }
 
   // Timer
@@ -154,18 +171,14 @@ export default function TestZyro() {
   // saveProgress — reads from ref, no stale closure
   const saveProgress = useCallback(() => {
     const s = cbtStateRef.current
-    if (!s.cbtOn || s.done || !s.Qs?.length) return
-    try {
-      const saveData = {
-        cfg: s.cfg,
-        Qs: stripImages(s.Qs),  // strip images!
-        ans: cbtAns.current,
-        marked: s.marked, visited: s.visited, cur: s.cur,
-        elapsed: Math.round((Date.now() - startRef.current) / 1000),
-        savedAt: Date.now()
-      }
-      localStorage.setItem(RESUME_KEY, JSON.stringify(saveData))
-    } catch(e) { console.warn('saveProgress failed:', e.message) }
+    if (!s.cbtOn || s.done || !s.cfg?.id) return
+    saveResume({
+      testPath: s.cfg.id, cfg: s.cfg,
+      ans: cbtAns.current,
+      marked: s.marked, visited: s.visited, cur: s.cur,
+      elapsed: Math.round((Date.now() - startRef.current) / 1000),
+      savedAt: Date.now()
+    })
   }, [])
 
   // Register auto-save once when CBT starts
@@ -179,42 +192,62 @@ export default function TestZyro() {
   const exitCBT = () => {
     if (!confirm('Exit? Progress saved — resume anytime.')) return
     clearInterval(timerRef.current)
-    // Save synchronously using ref data
-    try {
-      const s = cbtStateRef.current
-      const saveData = {
-        cfg: s.cfg, Qs: stripImages(s.Qs), ans: cbtAns.current,
-        marked: s.marked, visited: s.visited, cur: s.cur,
-        elapsed: Math.round((Date.now() - startRef.current) / 1000),
-        savedAt: Date.now()
-      }
-      localStorage.setItem(RESUME_KEY, JSON.stringify(saveData))
-      setResumeData(saveData)
-    } catch(e) {}
+    const s = cbtStateRef.current
+    const saveData = {
+      testPath: s.cfg.id, cfg: s.cfg,
+      ans: cbtAns.current,
+      marked: s.marked, visited: s.visited, cur: s.cur,
+      elapsed: Math.round((Date.now() - startRef.current) / 1000),
+      savedAt: Date.now()
+    }
+    saveResume(saveData)
+    setResumeData(saveData)
     setCbtLoading(false)
     setCbtOn(false); setResult(null)
   }
 
-  const resumeTest = (rd) => {
-    // rd.Qs has no images — that's fine, questions still render text
-    setQs(rd.Qs); setCfg(rd.cfg)
-    setAns(rd.ans); cbtAns.current = rd.ans
-    setMarked(rd.marked || new Array(rd.Qs.length).fill(false))
-    setVisited(rd.visited || new Array(rd.Qs.length).fill(false))
-    setCur(rd.cur || 0)
-    setDone(false); setReviewing(false); setResult(null)
-    setSecs(Math.max(0, (rd.cfg.dur*60) - rd.elapsed))
-    if (isBITSAT(rd.cfg.subject||'')) {
-      setActiveNavSubj(rd.Qs[rd.cur||0]?.subject || BITSAT_SUBJECTS[0])
-    } else { setActiveNavSubj(null) }
-    setCbtOn(true)
-    startRef.current = Date.now() - (rd.elapsed*1000)
-    clearInterval(timerRef.current)
-    setResumeData(null)
+  const resumeTest = async (rd) => {
+    if (cbtLoading) return
+    setCbtLoading(true)
+    try {
+      // Re-fetch test to get fresh questions + images
+      const testPath = rd.testPath || rd.cfg?.id
+      let qs
+      if (testPath && !testPath.startsWith('json_')) {
+        const r = await fetch(`/api/test/${testPath}`)
+        const d = await r.json()
+        qs = d.questions
+        if (rd.cfg && d.pageImages) rd.cfg.pageImages = d.pageImages
+      } else {
+        // Saved test — try to find in savedTests
+        qs = null
+      }
+      if (!qs) throw new Error('Could not load test questions')
+
+      setQs(qs); setCfg(rd.cfg)
+      const restoredAns = rd.ans && rd.ans.length === qs.length ? rd.ans : new Array(qs.length).fill(null)
+      setAns(restoredAns); cbtAns.current = restoredAns
+      setMarked(rd.marked?.length === qs.length ? rd.marked : new Array(qs.length).fill(false))
+      setVisited(rd.visited?.length === qs.length ? rd.visited : new Array(qs.length).fill(false))
+      setCur(rd.cur || 0)
+      setDone(false); setReviewing(false); setResult(null)
+      setSecs(Math.max(0, (rd.cfg.dur*60) - rd.elapsed))
+      if (isBITSAT(rd.cfg.subject||'')) {
+        setActiveNavSubj(qs[rd.cur||0]?.subject || BITSAT_SUBJECTS[0])
+      } else { setActiveNavSubj(null) }
+      setCbtOn(true)
+      setCbtLoading(false)
+      startRef.current = Date.now() - (rd.elapsed*1000)
+      clearInterval(timerRef.current)
+      setResumeData(null)
+    } catch(e) {
+      alert('Could not resume: ' + e.message)
+      setCbtLoading(false)
+    }
   }
 
   const discardResume = () => {
-    localStorage.removeItem(RESUME_KEY)
+    clearResume()
     setResumeData(null)
   }
 
@@ -275,33 +308,28 @@ export default function TestZyro() {
     const max=Qs.length*(cfg.mCor||3)
     const res={cor,wrg,skp,un,score,max,elapsed,pct:Math.round(cor/Qs.length*100),answers:finalAns,subjStats}
     setResult(res); setDone(true)
-    // Clear resume
-    try { localStorage.removeItem(RESUME_KEY) } catch(e) {}
+    clearResume()
     setResumeData(null)
-    // Save attempt to localStorage
-    try {
-      const attempt = {
-        id: Date.now()+'_'+Math.random().toString(36).slice(2,6),
-        testId: cfg.id, testTitle: cfg.title, subject: cfg.subject,
-        date: new Date().toISOString(),
-        score: res.score, maxScore: res.max, accuracy: res.pct,
-        correct: res.cor, wrong: res.wrg, skipped: res.skp, unattempted: res.un,
-        duration: res.elapsed, marksCorrect: cfg.mCor, marksWrong: cfg.mNeg,
-        subjStats: res.subjStats,
-        questions: Qs.map((q,i)=>({
-          qnum:q.qnum||i+1, subject:q.subject||'Other', type:q.type,
-          text:q.text, opts:q.opts,
-          correctAnswer:q.ans, yourAnswer:finalAns[i],
-          result:!finalAns[i]?'unattempted':finalAns[i]==='skip'?'skipped':
-            ((q.ans||'').toUpperCase().trim()===(finalAns[i]||'').toUpperCase().trim())?'correct':'wrong'
-        }))
-      }
-      const prev = JSON.parse(localStorage.getItem(ATTEMPTS_KEY)||'[]')
-      // Remove old attempt for same test
-      const updated = [attempt, ...prev.filter(a=>a.testId!==cfg.id)].slice(0,30)
-      localStorage.setItem(ATTEMPTS_KEY, JSON.stringify(updated))
-      setAttempts(updated)
-    } catch(e) {}
+    // Save lean attempt — only answers + scores, NO images. testPath used to re-fetch later.
+    const attempt = {
+      id: Date.now()+'_'+Math.random().toString(36).slice(2,6),
+      testId: cfg.id, testPath: cfg.id, testTitle: cfg.title, subject: cfg.subject,
+      date: new Date().toISOString(),
+      score: res.score, maxScore: res.max, accuracy: res.pct,
+      correct: res.cor, wrong: res.wrg, skipped: res.skp, unattempted: res.un,
+      duration: res.elapsed, marksCorrect: cfg.mCor, marksWrong: cfg.mNeg,
+      subjStats: res.subjStats,
+      // Store only answers per question (no images)
+      questions: Qs.map((q,i)=>({
+        qnum:q.qnum||i+1, subject:q.subject||'Other', type:q.type,
+        text:q.text, opts:q.opts,
+        correctAnswer:q.ans, yourAnswer:finalAns[i],
+        result:!finalAns[i]?'unattempted':finalAns[i]==='skip'?'skipped':
+          ((q.ans||'').toUpperCase().trim()===(finalAns[i]||'').toUpperCase().trim())?'correct':'wrong'
+      }))
+    }
+    const updated = saveAttempt(attempt)
+    setAttempts(updated)
   }, [Qs, cfg])
 
   const downloadOutputFile = (res) => {
@@ -393,7 +421,34 @@ export default function TestZyro() {
             <TestCard key={t.path||t.id} t={t} ci={i} globalLoading={cbtLoading}
               onCBT={()=>startFromTree(t.path)}
               attempt={attempts.find(a=>a.testId===t.id||a.testId===(t.path))}
-              onAnalyse={att=>setAnalyseAttempt(att)}
+              onAnalyse={async att=>{
+                try {
+                  let fullQs = att.questions
+                  const tp = att.testPath || att.testId
+                  if (tp && !tp.startsWith('json_')) {
+                    const r = await fetch(`/api/test/${tp}`)
+                    const d = await r.json()
+                    fullQs = d.questions.map((q,i)=>{
+                      const stored = att.questions?.[i]
+                      return {
+                        ...q,
+                        yourAnswer: stored?.yourAnswer,
+                        correctAnswer: q.ans,
+                        result: stored?.result || (!stored?.yourAnswer?'unattempted':stored?.yourAnswer==='skip'?'skipped':((q.ans||'').toUpperCase().trim()===(stored?.yourAnswer||'').toUpperCase().trim())?'correct':'wrong')
+                      }
+                    })
+                  }
+                  const data = {
+                    testTitle:att.testTitle, subject:att.subject, date:att.date,
+                    score:att.score, maxScore:att.maxScore, accuracy:att.accuracy,
+                    correct:att.correct, wrong:att.wrong, skipped:att.skipped, unattempted:att.unattempted,
+                    duration:att.duration, marksCorrect:att.marksCorrect, marksWrong:att.marksWrong,
+                    subjStats:att.subjStats, questions:fullQs
+                  }
+                  sessionStorage.setItem('tz_analyse', JSON.stringify(data))
+                  window.location.href = '/analyser?src=auto'
+                } catch(e) { alert('Could not load: '+e.message) }
+              }}
               onReattempt={(att)=>{deleteAttempt(att.id);startFromTree(t.path)}}
             />
           ))}
@@ -437,53 +492,6 @@ export default function TestZyro() {
           <a href="/admin" className="nb">⚙️ Admin</a>
         </nav>
       </header>
-
-      {/* ── INLINE ANALYSER MODAL ── */}
-      {analyseAttempt && (
-        <div className="modal-overlay" onClick={e=>{if(e.target.className==='modal-overlay')setAnalyseAttempt(null)}}>
-          <div className="analyse-modal">
-            <div className="am-header">
-              <div>
-                <div className="am-title">📊 {analyseAttempt.testTitle}</div>
-                <div className="am-meta">{fmtDate(analyseAttempt.date)} · Score: <strong style={{color:analyseAttempt.score>=0?'#4ade80':'#f87171'}}>{analyseAttempt.score}/{analyseAttempt.maxScore}</strong> · {analyseAttempt.accuracy}% accuracy</div>
-              </div>
-              <button className="am-close" onClick={()=>setAnalyseAttempt(null)}>✕</button>
-            </div>
-            {/* Stats grid */}
-            <div className="am-stats">
-              {[['✓',analyseAttempt.correct,'Correct','#4ade80'],['✗',analyseAttempt.wrong,'Wrong','#f87171'],['↩',analyseAttempt.skipped,'Skipped','#fbbf24'],['—',analyseAttempt.unattempted,'Not Att.','#888']].map(([ic,n,l,c])=>(
-                <div key={l} className="am-stat"><div className="am-stat-n" style={{color:c}}>{n}</div><div className="am-stat-l">{ic} {l}</div></div>
-              ))}
-            </div>
-            {/* Subject breakdown */}
-            {analyseAttempt.subjStats && (
-              <div className="am-subj">
-                {Object.entries(analyseAttempt.subjStats).map(([s,st])=>{
-                  const sc=getSubjColor(s),tot=st.cor+st.wrg+st.skp+st.un,pct=tot?Math.round(st.cor/tot*100):0
-                  const score=st.cor*(analyseAttempt.marksCorrect||3)-st.wrg*(analyseAttempt.marksWrong||1)
-                  return(<div key={s} className="am-subj-row">
-                    <span className="am-subj-badge" style={{background:sc.light,color:sc.bg}}>{sc.label}</span>
-                    <span className="am-subj-name">{s}</span>
-                    <div className="am-bar-wrap"><div className="am-bar" style={{width:pct+'%',background:sc.bg}}/></div>
-                    <span className="am-pct" style={{color:sc.bg}}>{pct}%</span>
-                    <span className="am-detail" style={{color:'#4ade80'}}>✓{st.cor}</span>
-                    <span className="am-detail" style={{color:'#f87171'}}>✗{st.wrg}</span>
-                    <span className="am-detail" style={{color:'#888'}}>+{score>=0?score:score}</span>
-                  </div>)
-                })}
-              </div>
-            )}
-            <div className="am-footer">
-              <button className="am-dl" onClick={()=>{
-                const blob=new Blob([JSON.stringify(analyseAttempt,null,2)],{type:'application/json'})
-                const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url
-                a.download=`${analyseAttempt.testTitle}_result.json`;a.click();URL.revokeObjectURL(url)
-              }}>📥 Download Output File</button>
-              <button className="am-close-btn" onClick={()=>setAnalyseAttempt(null)}>Close</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {page==='library' && (
         <div className="wrap anim">
@@ -531,7 +539,19 @@ export default function TestZyro() {
               <TestCard key={t.id} t={t} ci={i} globalLoading={cbtLoading}
                 onCBT={()=>startFromSaved(t)}
                 attempt={attempts.find(a=>a.testId===t.id)}
-                onAnalyse={att=>setAnalyseAttempt(att)}
+                onAnalyse={async att=>{
+                  try {
+                    const data = {
+                      testTitle:att.testTitle, subject:att.subject, date:att.date,
+                      score:att.score, maxScore:att.maxScore, accuracy:att.accuracy,
+                      correct:att.correct, wrong:att.wrong, skipped:att.skipped, unattempted:att.unattempted,
+                      duration:att.duration, marksCorrect:att.marksCorrect, marksWrong:att.marksWrong,
+                      subjStats:att.subjStats, questions:att.questions
+                    }
+                    sessionStorage.setItem('tz_analyse', JSON.stringify(data))
+                    window.location.href = '/analyser?src=auto'
+                  } catch(e) { alert('Could not load: '+e.message) }
+                }}
                 onReattempt={(att)=>{deleteAttempt(att.id);startFromSaved(t)}}
                 onDel={()=>{if(confirm('Delete?')){const l=savedTests.filter(x=>x.id!==t.id);setSavedTests(l);try{localStorage.setItem(SAVED_KEY,JSON.stringify(l))}catch(e){}}}}
               />
@@ -754,7 +774,33 @@ export default function TestZyro() {
             </div>
             <div className="res-actions">
               <button className="btn-download" onClick={()=>downloadOutputFile(result)}>📥 Download Output</button>
-              <button className="btn-review" onClick={()=>{setReviewing(true);setResult(null);setCur(0)}}>📖 Review Answers</button>
+              <button className="btn-review" onClick={async ()=>{
+                // Fetch fresh test (with images), merge answers, go to analyser
+                try {
+                  let fullQs = Qs
+                  if (cfg.id && !cfg.id.startsWith('json_')) {
+                    const r = await fetch(`/api/test/${cfg.id}`)
+                    const d = await r.json()
+                    // Merge: fresh images + stored answers
+                    fullQs = d.questions.map((q,i)=>({
+                      ...q,
+                      yourAnswer: result.answers[i],
+                      correctAnswer: q.ans,
+                      result: !result.answers[i]?'unattempted':result.answers[i]==='skip'?'skipped':
+                        ((q.ans||'').toUpperCase().trim()===(result.answers[i]||'').toUpperCase().trim())?'correct':'wrong'
+                    }))
+                  }
+                  const data = {
+                    testTitle:cfg.title, subject:cfg.subject, date:new Date().toISOString(),
+                    score:result.score, maxScore:result.max, accuracy:result.pct,
+                    correct:result.cor, wrong:result.wrg, skipped:result.skp, unattempted:result.un,
+                    duration:result.elapsed, marksCorrect:cfg.mCor, marksWrong:cfg.mNeg,
+                    subjStats:result.subjStats, questions:fullQs
+                  }
+                  sessionStorage.setItem('tz_analyse', JSON.stringify(data))
+                  window.location.href = '/analyser?src=auto'
+                } catch(e) { alert('Could not load: '+e.message) }
+              }}>📊 Analyse Test</button>
               <button className="btn-back-lib" onClick={()=>{setResult(null);setCbtOn(false);setCbtLoading(false);setPage('library')}}>📚 Library</button>
             </div>
             <div className="res-download-note">💡 Your attempt is auto-saved — click Analyse on the test card anytime</div>

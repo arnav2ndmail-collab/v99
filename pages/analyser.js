@@ -28,18 +28,35 @@ export default function Analyser() {
   const [curQ, setCurQ] = useState(0)
   const fileRef = useRef()
 
+  const processData = (d) => {
+    if (!Array.isArray(d.questions)) throw new Error('No questions array found')
+    d.questions = d.questions.map(q => ({
+      ...q,
+      result: q.result || (!q.yourAnswer ? 'unattempted' : q.yourAnswer==='skip' ? 'skipped' :
+        String(q.correctAnswer||'').toUpperCase().trim() === String(q.yourAnswer||'').toUpperCase().trim() ? 'correct' : 'wrong')
+    }))
+    const first = SUBJ_ORDER.filter(s=>s!=='Bonus').find(s => d.questions.some(q=>q.subject===s)) || d.questions[0]?.subject
+    setData(d); setActiveSubj(first); setCurQ(0); setFilter('all'); setTab('overview')
+  }
+
+  // Auto-load when redirected from test with ?src=auto
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('src') === 'auto') {
+      try {
+        const stored = sessionStorage.getItem('tz_analyse')
+        if (stored) { processData(JSON.parse(stored)); return }
+      } catch(e) {}
+      setErr('❌ No test data found. Please upload a result file.')
+    }
+  }, [])
+
   const loadFile = async file => {
     setErr(''); setData(null)
     try {
       const d = JSON.parse(await file.text())
-      if (!Array.isArray(d.questions)) throw new Error('No questions array found')
-      d.questions = d.questions.map(q => ({
-        ...q,
-        result: q.result || (!q.yourAnswer ? 'unattempted' : q.yourAnswer==='skip' ? 'skipped' :
-          String(q.correctAnswer||'').toUpperCase().trim() === String(q.yourAnswer||'').toUpperCase().trim() ? 'correct' : 'wrong')
-      }))
-      const first = SUBJ_ORDER.filter(s=>s!=='Bonus').find(s => d.questions.some(q=>q.subject===s)) || d.questions[0]?.subject
-      setData(d); setActiveSubj(first); setCurQ(0); setFilter('all'); setTab('overview')
+      processData(d)
     } catch(e) { setErr('❌ '+e.message) }
   }
 
