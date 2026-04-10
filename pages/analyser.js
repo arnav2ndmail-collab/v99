@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import Head from 'next/head'
 
 const SUBJ_ORDER = ['Physics','Chemistry','Maths','English & LR','Bonus']
