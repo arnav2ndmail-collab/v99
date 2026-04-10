@@ -36,7 +36,7 @@ function saveResume(data) {
 function loadResume() {
   try {
     const s = localStorage.getItem(RESUME_KEY)
-    if (!s) return null
+    if (!s || s.trim() === '') return null
     const d = JSON.parse(s)
     if (d?.cfg && d?.savedAt && Date.now()-d.savedAt < 6*60*60*1000) return d
     localStorage.removeItem(RESUME_KEY)
@@ -219,8 +219,10 @@ export default function TestZyro() {
         qs = d.questions
         if (rd.cfg && d.pageImages) rd.cfg.pageImages = d.pageImages
       } else {
-        // Saved test — try to find in savedTests
-        qs = null
+        // Saved test (custom upload) — find in savedTests
+        const saved = JSON.parse(localStorage.getItem(SAVED_KEY)||'[]')
+        const match = saved.find(t => t.id === testPath)
+        if (match) qs = match.questions
       }
       if (!qs) throw new Error('Could not load test questions')
 
