@@ -43,16 +43,56 @@ export default function Analyser() {
   useEffect(() => {
     if (typeof window === 'undefined') return
     const params = new URLSearchParams(window.location.search)
-    if (params.get('src') === 'auto') {
+    if (params.get('src') !== 'auto') return
+
+    const run = async () => {
       try {
         const stored = sessionStorage.getItem('tz_analyse')
-        if (stored && stored !== 'null' && stored !== 'undefined') {
-          processData(JSON.parse(stored))
-          return
+        if (!stored || stored === 'null') { setErr('❌ No test data found. Please upload a result file.'); return }
+        const meta = JSON.parse(stored) // tiny: has answers but no images
+
+        const tp = params.get('tp') ? decodeURIComponent(params.get('tp')) : ''
+        let questions
+
+        if (tp && !tp.startsWith('json_')) {
+          // Fetch fresh test JSON to get images
+          const r = await fetch(`/api/test/${tp}`)
+          if (!r.ok) throw new Error(`Test not found (${r.status})`)
+          const d = await r.json()
+          // Merge: fresh images from server + stored answers from meta
+          questions = d.questions.map((q, i) => {
+            const stored = meta.answers?.[i]
+            const yourAns = stored?.yourAnswer ?? null
+            const correct = (q.ans||'').toUpperCase().trim()
+            const yours   = (yourAns||'').toUpperCase().trim()
+            return {
+              ...q,
+              yourAnswer: yourAns,
+              correctAnswer: q.ans,
+              result: !yourAns ? 'unattempted' : yourAns==='skip' ? 'skipped' :
+                      correct===yours ? 'correct' : 'wrong'
+            }
+          })
+        } else {
+          // No testPath (uploaded JSON test) — use stored question text, no images
+          questions = meta.answers?.map((a, i) => ({
+            qnum: i+1, subject: 'Other', type: 'MCQ',
+            yourAnswer: a.yourAnswer, correctAnswer: a.correctAnswer, result: a.result
+          })) || []
         }
-      } catch(e) {}
-      setErr('❌ No test data found. Please upload a result file.')
+
+        processData({
+          testTitle: meta.testTitle, subject: meta.subject, date: meta.date,
+          score: meta.score, maxScore: meta.maxScore, accuracy: meta.accuracy,
+          correct: meta.correct, wrong: meta.wrong, skipped: meta.skipped, unattempted: meta.unattempted,
+          duration: meta.duration, marksCorrect: meta.marksCorrect, marksWrong: meta.marksWrong,
+          subjStats: meta.subjStats, questions
+        })
+      } catch(e) {
+        setErr('❌ Could not load: ' + e.message)
+      }
     }
+    run()
   }, [])
 
   const loadFile = async file => {

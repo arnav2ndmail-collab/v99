@@ -423,30 +423,17 @@ export default function TestZyro() {
               attempt={attempts.find(a=>a.testId===t.id||a.testId===(t.path))}
               onAnalyse={async att=>{
                 try {
-                  let fullQs = att.questions
                   const tp = att.testPath || att.testId
-                  if (tp && !tp.startsWith('json_')) {
-                    const r = await fetch(`/api/test/${tp}`)
-                    const d = await r.json()
-                    fullQs = d.questions.map((q,i)=>{
-                      const stored = att.questions?.[i]
-                      return {
-                        ...q,
-                        yourAnswer: stored?.yourAnswer,
-                        correctAnswer: q.ans,
-                        result: stored?.result || (!stored?.yourAnswer?'unattempted':stored?.yourAnswer==='skip'?'skipped':((q.ans||'').toUpperCase().trim()===(stored?.yourAnswer||'').toUpperCase().trim())?'correct':'wrong')
-                      }
-                    })
-                  }
-                  const data = {
+                  const tiny = {
                     testTitle:att.testTitle, subject:att.subject, date:att.date,
                     score:att.score, maxScore:att.maxScore, accuracy:att.accuracy,
                     correct:att.correct, wrong:att.wrong, skipped:att.skipped, unattempted:att.unattempted,
                     duration:att.duration, marksCorrect:att.marksCorrect, marksWrong:att.marksWrong,
-                    subjStats:att.subjStats, questions:fullQs
+                    subjStats:att.subjStats,
+                    answers:att.questions?.map(q=>({yourAnswer:q.yourAnswer,result:q.result,correctAnswer:q.correctAnswer}))
                   }
-                  sessionStorage.setItem('tz_analyse', JSON.stringify(data))
-                  window.location.href = '/analyser?src=auto'
+                  sessionStorage.setItem('tz_analyse', JSON.stringify(tiny))
+                  window.location.href = '/analyser?src=auto&tp='+encodeURIComponent(tp||'')
                 } catch(e) { alert('Could not load: '+e.message) }
               }}
               onReattempt={(att)=>{deleteAttempt(att.id);startFromTree(t.path)}}
@@ -541,15 +528,17 @@ export default function TestZyro() {
                 attempt={attempts.find(a=>a.testId===t.id)}
                 onAnalyse={async att=>{
                   try {
-                    const data = {
+                    const tp = att.testPath || att.testId
+                    const tiny = {
                       testTitle:att.testTitle, subject:att.subject, date:att.date,
                       score:att.score, maxScore:att.maxScore, accuracy:att.accuracy,
                       correct:att.correct, wrong:att.wrong, skipped:att.skipped, unattempted:att.unattempted,
                       duration:att.duration, marksCorrect:att.marksCorrect, marksWrong:att.marksWrong,
-                      subjStats:att.subjStats, questions:att.questions
+                      subjStats:att.subjStats,
+                      answers:att.questions?.map(q=>({yourAnswer:q.yourAnswer,result:q.result,correctAnswer:q.correctAnswer}))
                     }
-                    sessionStorage.setItem('tz_analyse', JSON.stringify(data))
-                    window.location.href = '/analyser?src=auto'
+                    sessionStorage.setItem('tz_analyse', JSON.stringify(tiny))
+                    window.location.href = '/analyser?src=auto&tp='+encodeURIComponent(tp||'')
                   } catch(e) { alert('Could not load: '+e.message) }
                 }}
                 onReattempt={(att)=>{deleteAttempt(att.id);startFromSaved(t)}}
@@ -775,31 +764,22 @@ export default function TestZyro() {
             <div className="res-actions">
               <button className="btn-download" onClick={()=>downloadOutputFile(result)}>📥 Download Output</button>
               <button className="btn-review" onClick={async ()=>{
-                // Fetch fresh test (with images), merge answers, go to analyser
                 try {
-                  let fullQs = Qs
-                  const tp = cfg.testPath || cfg.id
-                  if (tp && !tp.startsWith('json_')) {
-                    const r = await fetch(`/api/test/${tp}`)
-                    const d = await r.json()
-                    // Merge: fresh images + stored answers
-                    fullQs = d.questions.map((q,i)=>({
-                      ...q,
-                      yourAnswer: result.answers[i],
-                      correctAnswer: q.ans,
-                      result: !result.answers[i]?'unattempted':result.answers[i]==='skip'?'skipped':
-                        ((q.ans||'').toUpperCase().trim()===(result.answers[i]||'').toUpperCase().trim())?'correct':'wrong'
-                    }))
-                  }
-                  const data = {
+                  const tiny = {
                     testTitle:cfg.title, subject:cfg.subject, date:new Date().toISOString(),
                     score:result.score, maxScore:result.max, accuracy:result.pct,
                     correct:result.cor, wrong:result.wrg, skipped:result.skp, unattempted:result.un,
                     duration:result.elapsed, marksCorrect:cfg.mCor, marksWrong:cfg.mNeg,
-                    subjStats:result.subjStats, questions:fullQs
+                    subjStats:result.subjStats,
+                    answers:result.answers.map((a,i)=>({
+                      yourAnswer:a,
+                      correctAnswer:Qs[i]?.ans,
+                      result:!a?'unattempted':a==='skip'?'skipped':((Qs[i]?.ans||'').toUpperCase().trim()===(a||'').toUpperCase().trim())?'correct':'wrong'
+                    }))
                   }
-                  sessionStorage.setItem('tz_analyse', JSON.stringify(data))
-                  window.location.href = '/analyser?src=auto'
+                  sessionStorage.setItem('tz_analyse', JSON.stringify(tiny))
+                  const tp = cfg.testPath || cfg.id
+                  window.location.href = '/analyser?src=auto&tp='+encodeURIComponent(tp||'')
                 } catch(e) { alert('Could not load: '+e.message) }
               }}>📊 Analyse Test</button>
               <button className="btn-back-lib" onClick={()=>{setResult(null);setCbtOn(false);setCbtLoading(false);setPage('library')}}>📚 Library</button>
