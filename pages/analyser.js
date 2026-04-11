@@ -18,6 +18,10 @@ const RES = {
 }
 const DOT_COLOR = { correct:'#4ade80', wrong:'#f87171', skipped:'#fb923c', unattempted:'#334155' }
 
+const BM_KEY = 'tz_bookmarks_v1'
+function loadBooks() { try { return JSON.parse(localStorage.getItem(BM_KEY)||'{}') } catch(e) { return {} } }
+function saveBooks(b) { try { localStorage.setItem(BM_KEY, JSON.stringify(b)) } catch(e) {} }
+
 export default function Analyser() {
   const [data, setData] = useState(null)
   const [err, setErr]   = useState('')
@@ -27,6 +31,46 @@ export default function Analyser() {
   const [filter, setFilter] = useState('all')
   const [curQ, setCurQ] = useState(0)
   const fileRef = useRef()
+  // Bookmark state
+  const [books, setBooks]           = useState({})
+  const [bmModal, setBmModal]       = useState(false)  // show notebook picker
+  const [bmQ, setBmQ]               = useState(null)   // question to bookmark
+  const [bmTarget, setBmTarget]     = useState('')     // selected notebook
+  const [bmNewName, setBmNewName]   = useState('')
+  const [bmCreating, setBmCreating] = useState(false)
+  const [bmDone, setBmDone]         = useState(false)
+
+  useEffect(() => { setBooks(loadBooks()) }, [])
+
+  const openBmModal = (q) => {
+    setBmQ(q); setBmModal(true); setBmTarget(''); setBmNewName(''); setBmCreating(false); setBmDone(false)
+  }
+  const doBookmark = () => {
+    const nb = bmCreating ? bmNewName.trim() : bmTarget
+    if (!nb) return
+    const b = loadBooks()
+    if (!b[nb]) b[nb] = []
+    // Don't duplicate — same qnum+testTitle
+    const already = b[nb].some(x => x.qnum===bmQ.qnum && x.testTitle===data.testTitle)
+    if (!already) {
+      // Store lean: no images, just text+opts+answer+testPath
+      b[nb].push({
+        qnum: bmQ.qnum,
+        subject: bmQ.subject,
+        type: bmQ.type,
+        text: bmQ.text || '',
+        opts: bmQ.opts || [],
+        correctAnswer: (bmQ.correctAnswer||bmQ.ans||'').toString().toUpperCase(),
+        hasImage: !!(bmQ.images?.length || bmQ.hasImage),
+        testTitle: data.testTitle,
+        testPath: new URLSearchParams(window.location.search).get('tp') ? decodeURIComponent(new URLSearchParams(window.location.search).get('tp')) : '',
+        savedAt: Date.now()
+      })
+    }
+    saveBooks(b); setBooks(b)
+    setBmDone(true)
+    setTimeout(() => setBmModal(false), 800)
+  }
 
   const processData = (d) => {
     if (!Array.isArray(d.questions)) throw new Error('No questions array found')
@@ -177,11 +221,52 @@ export default function Analyser() {
             <button className={`app-tab${tab==='review'?' on':''}`} onClick={()=>setTab('review')}>📖 Review</button>
           </div>
           <div className="app-header-right">
+            <a href="/bookmarks" className="new-file-btn" style={{textDecoration:'none'}}>🔖 Bookmarks</a>
             <div className="test-chip">{data.testTitle}</div>
             <button className="new-file-btn" onClick={()=>setData(null)}>↩ New File</button>
           </div>
         </div>
       </header>
+
+      {/* ── BOOKMARK MODAL ── */}
+      {bmModal && (
+        <div className="bm-overlay" onClick={e=>{if(e.target.className==='bm-overlay')setBmModal(false)}}>
+          <div className="bm-modal">
+            {bmDone ? (
+              <div className="bm-done">✅ Bookmarked!</div>
+            ) : (
+              <>
+                <div className="bm-modal-title">🔖 Save to Notebook</div>
+                {Object.keys(books).length > 0 && !bmCreating && (
+                  <div className="bm-nb-list">
+                    {Object.keys(books).map(nb=>(
+                      <div key={nb} className={`bm-nb-item${bmTarget===nb?' sel':''}`} onClick={()=>setBmTarget(nb)}>
+                        <span>{nb}</span><span className="bm-nb-cnt">{books[nb].length} qs</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {!bmCreating ? (
+                  <button className="bm-create-nb" onClick={()=>setBmCreating(true)}>+ Create new notebook</button>
+                ) : (
+                  <div className="bm-new-nb">
+                    <input className="bm-nb-inp" autoFocus placeholder="Notebook name…"
+                      value={bmNewName} onChange={e=>setBmNewName(e.target.value)}
+                      onKeyDown={e=>e.key==='Enter'&&doBookmark()}/>
+                  </div>
+                )}
+                <div className="bm-modal-actions">
+                  <button className="bm-save-btn" onClick={doBookmark}
+                    disabled={bmCreating ? !bmNewName.trim() : !bmTarget}>
+                    Bookmark
+                  </button>
+                  <button className="bm-cancel" onClick={()=>setBmModal(false)}>Cancel</button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ══ OVERVIEW ══ */}
       {tab==='overview' && (
@@ -349,8 +434,11 @@ export default function Analyser() {
                       {curQ2.subject&&<span className="rq-subj" style={{background:getSC(curQ2.subject).light,color:getSC(curQ2.subject).bg,border:`1px solid ${getSC(curQ2.subject).dot}44`}}>{getSC(curQ2.subject).emoji} {curQ2.subject}</span>}
                       <span className={`rq-type ${curQ2.type==='INTEGER'?'int':'mcq'}`}>{curQ2.type==='INTEGER'?'Integer':'MCQ'}</span>
                     </div>
-                    <div className="rq-result" style={{background:RES[curQ2.result]?.bg,color:RES[curQ2.result]?.color,border:`1px solid ${RES[curQ2.result]?.border}`}}>
-                      {RES[curQ2.result]?.label}
+                    <div style={{display:'flex',alignItems:'center',gap:8}}>
+                      <button className="rq-bm-btn" onClick={()=>openBmModal(curQ2)} title="Bookmark this question">🔖</button>
+                      <div className="rq-result" style={{background:RES[curQ2.result]?.bg,color:RES[curQ2.result]?.color,border:`1px solid ${RES[curQ2.result]?.border}`}}>
+                        {RES[curQ2.result]?.label}
+                      </div>
                     </div>
                   </div>
 
@@ -548,6 +636,28 @@ const APP_CSS = `
 .rq-type.mcq{background:#dbeafe;color:#1d4ed8;border:1px solid #93c5fd}
 .rq-type.int{background:#fef3c7;color:#92400e;border:1px solid #fcd34d}
 .rq-result{font-size:.78rem;font-weight:700;padding:5px 14px;border-radius:20px}
+.rq-bm-btn{background:#fff8e1;border:1px solid #ffe082;color:#f59e0b;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:.85rem;transition:all .15s}
+.rq-bm-btn:hover{background:#fef3c7;transform:scale(1.1)}
+/* Bookmark modal */
+.bm-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:2000;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(2px)}
+.bm-modal{background:white;border-radius:14px;padding:24px;width:100%;max-width:360px;box-shadow:0 20px 60px rgba(0,0,0,.2);animation:bm-in .2s ease}
+@keyframes bm-in{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:translateY(0)}}
+.bm-done{text-align:center;font-size:1.2rem;font-weight:700;color:#2e7d32;padding:10px 0}
+.bm-modal-title{font-weight:800;font-size:.95rem;color:#1a237e;margin-bottom:14px}
+.bm-nb-list{display:flex;flex-direction:column;gap:6px;margin-bottom:12px;max-height:200px;overflow-y:auto}
+.bm-nb-item{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border:1.5px solid #e0e0e0;border-radius:7px;cursor:pointer;transition:all .12s;font-size:.84rem}
+.bm-nb-item:hover{border-color:#1a237e;background:#f5f7ff}
+.bm-nb-item.sel{border-color:#1a237e;background:#e8eaf6;font-weight:600}
+.bm-nb-cnt{font-size:.65rem;color:#888;font-family:'Roboto Mono',monospace}
+.bm-create-nb{background:none;border:1.5px dashed #c5cae9;color:#1a237e;padding:8px;border-radius:7px;width:100%;font-size:.8rem;font-weight:600;cursor:pointer;margin-bottom:12px;font-family:'Inter',sans-serif}
+.bm-create-nb:hover{background:#f5f7ff}
+.bm-new-nb{margin-bottom:12px}
+.bm-nb-inp{width:100%;border:1.5px solid #c5cae9;border-radius:7px;padding:9px 12px;font-size:.84rem;outline:none;font-family:'Inter',sans-serif}
+.bm-nb-inp:focus{border-color:#1a237e}
+.bm-modal-actions{display:flex;gap:8px}
+.bm-save-btn{flex:1;background:#1a237e;color:white;border:none;padding:10px;border-radius:7px;font-weight:700;font-size:.84rem;cursor:pointer;font-family:'Inter',sans-serif}
+.bm-save-btn:disabled{background:#9e9e9e;cursor:not-allowed}
+.bm-cancel{padding:10px 16px;border-radius:7px;border:1px solid #ccc;background:white;font-size:.84rem;cursor:pointer;font-family:'Inter',sans-serif}
 .rq-body{background:#fafbff;border:1px solid #e8eaf6;border-radius:14px;padding:20px}
 .rq-img-wrap{text-align:center}
 .rq-text{font-size:.95rem;line-height:1.9;color:#1a1a2e;white-space:pre-wrap}

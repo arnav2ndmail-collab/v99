@@ -476,6 +476,7 @@ export default function TestZyro() {
           ))}
           <a href="/analyser" className="nb">📊 Analyser</a>
           <a href="/solutions" className="nb">📄 Solutions</a>
+          <a href="/bookmarks" className="nb">🔖 Bookmarks</a>
           <a href="/admin" className="nb">⚙️ Admin</a>
         </nav>
       </header>
