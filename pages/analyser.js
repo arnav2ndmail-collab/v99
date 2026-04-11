@@ -46,7 +46,10 @@ export default function Analyser() {
     if (params.get('src') === 'auto') {
       try {
         const stored = sessionStorage.getItem('tz_analyse')
-        if (stored) { processData(JSON.parse(stored)); return }
+        if (stored && stored !== 'null' && stored !== 'undefined') {
+          processData(JSON.parse(stored))
+          return
+        }
       } catch(e) {}
       setErr('❌ No test data found. Please upload a result file.')
     }

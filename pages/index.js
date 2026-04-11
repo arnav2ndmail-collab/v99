@@ -31,12 +31,15 @@ function getSubjColor(subj) {
 // ── LEAN STORAGE: only save answers/progress, re-fetch test for images ───
 // Resume: {testPath, ans, marked, visited, cur, elapsed, savedAt, cfg(no images)}
 function saveResume(data) {
-  try { localStorage.setItem(RESUME_KEY, JSON.stringify(data)) } catch(e) {}
+  try {
+    const str = JSON.stringify(data)
+    if (str && str.length > 10) localStorage.setItem(RESUME_KEY, str)
+  } catch(e) {}
 }
 function loadResume() {
   try {
     const s = localStorage.getItem(RESUME_KEY)
-    if (!s || s.trim() === '') return null
+    if (!s || s === 'null' || s === 'undefined' || s.length < 10) return null
     const d = JSON.parse(s)
     if (d?.cfg && d?.savedAt && Date.now()-d.savedAt < 6*60*60*1000) return d
     localStorage.removeItem(RESUME_KEY)
@@ -121,7 +124,7 @@ export default function TestZyro() {
       const r = await fetch(`/api/test/${testPath}`)
       const d = await r.json()
       if (!d.questions) throw new Error('bad file')
-      doLaunch(d.questions, { title:d.title, dur:d.dur||180, mCor:d.mCor||3, mNeg:d.mNeg||1, id:d.id||testPath, subject:d.subject, pageImages:d.pageImages||null })
+      doLaunch(d.questions, { title:d.title, dur:d.dur||180, mCor:d.mCor||3, mNeg:d.mNeg||1, id:d.id||testPath, testPath:testPath, subject:d.subject, pageImages:d.pageImages||null })
     } catch(e) { alert('Failed: '+e.message); setCbtLoading(false) }
   }
 
@@ -149,9 +152,9 @@ export default function TestZyro() {
     setCbtLoading(false)
     startRef.current = Date.now()
     clearInterval(timerRef.current)
-    // Save tiny resume - no Qs/images, just path + blank answers
+    // Save tiny resume - testPath is the actual file path for re-fetching
     saveResume({
-      testPath: c.id, cfg: c,
+      testPath: c.testPath || c.id, cfg: c,
       ans: blankAns, marked: new Array(qs.length).fill(false),
       visited: new Array(qs.length).fill(false),
       cur: 0, elapsed: 0, savedAt: Date.now()
@@ -173,7 +176,7 @@ export default function TestZyro() {
     const s = cbtStateRef.current
     if (!s.cbtOn || s.done || !s.cfg?.id) return
     saveResume({
-      testPath: s.cfg.id, cfg: s.cfg,
+      testPath: s.cfg.testPath || s.cfg.id, cfg: s.cfg,
       ans: cbtAns.current,
       marked: s.marked, visited: s.visited, cur: s.cur,
       elapsed: Math.round((Date.now() - startRef.current) / 1000),
@@ -194,7 +197,7 @@ export default function TestZyro() {
     clearInterval(timerRef.current)
     const s = cbtStateRef.current
     const saveData = {
-      testPath: s.cfg.id, cfg: s.cfg,
+      testPath: s.cfg.testPath || s.cfg.id, cfg: s.cfg,
       ans: cbtAns.current,
       marked: s.marked, visited: s.visited, cur: s.cur,
       elapsed: Math.round((Date.now() - startRef.current) / 1000),
@@ -210,36 +213,31 @@ export default function TestZyro() {
     if (cbtLoading) return
     setCbtLoading(true)
     try {
-      // Re-fetch test to get fresh questions + images
       const testPath = rd.testPath || rd.cfg?.id
-      let qs
-      if (testPath && !testPath.startsWith('json_')) {
-        const r = await fetch(`/api/test/${testPath}`)
-        const d = await r.json()
-        qs = d.questions
-        if (rd.cfg && d.pageImages) rd.cfg.pageImages = d.pageImages
-      } else {
-        // Saved test (custom upload) — find in savedTests
-        const saved = JSON.parse(localStorage.getItem(SAVED_KEY)||'[]')
-        const match = saved.find(t => t.id === testPath)
-        if (match) qs = match.questions
-      }
-      if (!qs) throw new Error('Could not load test questions')
+      if (!testPath) throw new Error('No test path saved')
+      // Re-fetch test to get fresh questions + images
+      const r = await fetch(`/api/test/${testPath}`)
+      if (!r.ok) throw new Error(`Test not found (${r.status})`)
+      const d = await r.json()
+      if (!d.questions?.length) throw new Error('No questions in test file')
+      const qs = d.questions
+      if (rd.cfg && d.pageImages) rd.cfg.pageImages = d.pageImages
 
       setQs(qs); setCfg(rd.cfg)
-      const restoredAns = rd.ans && rd.ans.length === qs.length ? rd.ans : new Array(qs.length).fill(null)
+      // Restore answers — if length mismatch use blank
+      const restoredAns = (rd.ans?.length === qs.length) ? rd.ans : new Array(qs.length).fill(null)
       setAns(restoredAns); cbtAns.current = restoredAns
-      setMarked(rd.marked?.length === qs.length ? rd.marked : new Array(qs.length).fill(false))
-      setVisited(rd.visited?.length === qs.length ? rd.visited : new Array(qs.length).fill(false))
+      setMarked((rd.marked?.length === qs.length) ? rd.marked : new Array(qs.length).fill(false))
+      setVisited((rd.visited?.length === qs.length) ? rd.visited : new Array(qs.length).fill(false))
       setCur(rd.cur || 0)
       setDone(false); setReviewing(false); setResult(null)
-      setSecs(Math.max(0, (rd.cfg.dur*60) - rd.elapsed))
+      setSecs(Math.max(0, (rd.cfg.dur*60) - (rd.elapsed||0)))
       if (isBITSAT(rd.cfg.subject||'')) {
         setActiveNavSubj(qs[rd.cur||0]?.subject || BITSAT_SUBJECTS[0])
       } else { setActiveNavSubj(null) }
       setCbtOn(true)
       setCbtLoading(false)
-      startRef.current = Date.now() - (rd.elapsed*1000)
+      startRef.current = Date.now() - ((rd.elapsed||0)*1000)
       clearInterval(timerRef.current)
       setResumeData(null)
     } catch(e) {
@@ -315,7 +313,7 @@ export default function TestZyro() {
     // Save lean attempt — only answers + scores, NO images. testPath used to re-fetch later.
     const attempt = {
       id: Date.now()+'_'+Math.random().toString(36).slice(2,6),
-      testId: cfg.id, testPath: cfg.id, testTitle: cfg.title, subject: cfg.subject,
+      testId: cfg.id, testPath: cfg.testPath || cfg.id, testTitle: cfg.title, subject: cfg.subject,
       date: new Date().toISOString(),
       score: res.score, maxScore: res.max, accuracy: res.pct,
       correct: res.cor, wrong: res.wrg, skipped: res.skp, unattempted: res.un,
@@ -780,8 +778,9 @@ export default function TestZyro() {
                 // Fetch fresh test (with images), merge answers, go to analyser
                 try {
                   let fullQs = Qs
-                  if (cfg.id && !cfg.id.startsWith('json_')) {
-                    const r = await fetch(`/api/test/${cfg.id}`)
+                  const tp = cfg.testPath || cfg.id
+                  if (tp && !tp.startsWith('json_')) {
+                    const r = await fetch(`/api/test/${tp}`)
                     const d = await r.json()
                     // Merge: fresh images + stored answers
                     fullQs = d.questions.map((q,i)=>({
